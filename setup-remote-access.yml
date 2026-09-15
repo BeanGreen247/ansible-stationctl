@@ -1,0 +1,112 @@
+# setup-remote-access.yml
+#
+# Overview
+#   Wires up remote access for the workstation: TigerVNC (X11 — see the
+#   Wayland limitation noted in setup-mate-desktop.yml) launching a MATE
+#   session, run as a proper systemd service, plus Tailscale for private
+#   network reachability (matches the existing homelab pattern — no exposed
+#   ports, same as the Starhaven homelab).
+#
+#   SECURITY NOTE: this playbook does NOT set the VNC password — that's a
+#   secret and stays out of the repo per policy. One-time manual step after
+#   the first run:
+#     ssh <user>@<workstation> 'vncpasswd'
+#   or scp a pre-made ~/.vnc/passwd file into place yourself.
+#
+# Target hosts
+#   ansible-playbook setup-remote-access.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Configure remote access (TigerVNC + Tailscale)
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  - name: Install TigerVNC packages
+    ansible.builtin.apt:
+      name: "{{ remote_access_packages }}"
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [remote-access, vnc, packages]
+
+  - name: Ensure end-user's .vnc directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.vnc"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0700"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [remote-access, vnc]
+
+  - name: Deploy VNC xstartup (launches MATE session)
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.vnc/xstartup"
+      content: |
+        #!/bin/sh
+        unset SESSION_MANAGER
+        unset DBUS_SESSION_BUS_ADDRESS
+        exec dbus-launch --exit-with-session mate-session
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [remote-access, vnc]
+
+  - name: Deploy stationctl-vncserver systemd template unit
+    ansible.builtin.template:
+      src: templates/stationctl-vncserver@.service.j2
+      dest: /etc/systemd/system/stationctl-vncserver@.service
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Reload systemd
+    tags: [remote-access, vnc, systemd]
+
+  - name: Enable and start VNC server on configured display
+    ansible.builtin.systemd:
+      name: "stationctl-vncserver@{{ vnc_display }}"
+      state: started
+      enabled: true
+      daemon_reload: true
+    tags: [remote-access, vnc, systemd]
+
+  - name: Download Tailscale install script
+    ansible.builtin.get_url:
+      url: https://tailscale.com/install.sh
+      dest: /tmp/tailscale-install.sh
+      mode: "0755"
+    tags: [remote-access, tailscale]
+
+  - name: Run Tailscale install script (idempotent, no-op if already installed)
+    ansible.builtin.command: /bin/sh /tmp/tailscale-install.sh
+    args:
+      creates: /usr/sbin/tailscaled
+    tags: [remote-access, tailscale]
+
+  - name: Ensure tailscaled service is enabled and running
+    ansible.builtin.service:
+      name: tailscaled
+      state: started
+      enabled: true
+    tags: [remote-access, tailscale]
+
+  - name: Print remote access summary
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "Remote access ready on: {{ inventory_hostname }}"
+      - "  VNC display:  :{{ vnc_display }} ({{ vnc_geometry }}, {{ vnc_depth }}bpp)"
+      - "  VNC password: NOT set by Ansible — run 'vncpasswd' as {{ vm_enduser_name }}"
+      - "  Tailscale:    installed, run 'tailscale up' once to authenticate"
+      - "========================================================"
+    tags: [remote-access, summary]
+
+  handlers:
+  - name: Reload systemd
+    ansible.builtin.systemd:
+      daemon_reload: true

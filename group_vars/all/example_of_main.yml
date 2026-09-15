@@ -1,0 +1,24 @@
+# group_vars/all/example_of_main.yml
+# Copy this file to group_vars/all/main.yml and fill in your values.
+# main.yml is gitignored — never commit real credentials.
+
+# Ansible become (used by every playbook in this repo)
+ansible_become: true
+ansible_become_method: sudo
+ansible_become_password: "{{ vault_become_password }}"
+
+# Generate with:
+#   ansible-vault encrypt_string --name 'vault_become_password' --vault-id default@prompt 'your_sudo_password'
+vault_become_password: !vault |
+  $ANSIBLE_VAULT;1.1;AES256
+  your_encrypted_string_here
+
+# End-user account created on each workstation (used by setup-base-debian.yml)
+# Leave vm_enduser_password_hash unset for SSH key only (locked password).
+vm_enduser_name: "kenny"
+vm_enduser_groups: "sudo,docker"
+vm_enduser_shell: "/bin/bash"
+vm_enduser_ssh_pub_key_file: "~/.ssh/id_rsa.pub"
+# vm_enduser_password_hash: !vault |
+#   $ANSIBLE_VAULT;1.1;AES256
+#   your_encrypted_string_here

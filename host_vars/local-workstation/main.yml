@@ -1,0 +1,3 @@
+# host_vars/local-workstation/main.yml
+# Non-secret, host-specific overrides for the bare-metal ThinkPad E490.
+machine_role: "bare-metal"

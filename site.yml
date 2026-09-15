@@ -1,0 +1,34 @@
+# site.yml
+#
+# Overview
+#   Single entry point — brings a workstation from a fresh Debian install to
+#   a fully configured, MATE-desktop, dev-ready machine. Chains every layer
+#   in order. Re-run any time; every playbook here is idempotent, so
+#   re-applying converges the machine back to what group_vars says it should
+#   be — that's the whole "edit the playbook once, replicate everywhere" idea.
+#
+# Usage
+#   Full bring-up on every workstation:
+#     ansible-playbook site.yml
+#   Just one machine:
+#     ansible-playbook site.yml --limit remote-workstation
+#     ansible-playbook site.yml --limit local-workstation
+#   Just one layer (tags match each playbook's own tag prefix):
+#     ansible-playbook site.yml --tags mate
+#
+# Order matters: ansibleuser must exist before anything else can connect as
+# it; base hardening before desktop/dev tooling; remote-access after MATE is
+# installed (it depends on mate-session existing).
+---
+- name: Bootstrap ansibleuser
+  import_playbook: setup-ansibleuser.yml
+- name: Base Debian hardening
+  import_playbook: setup-base-debian.yml
+- name: MATE desktop
+  import_playbook: setup-mate-desktop.yml
+- name: Development tools
+  import_playbook: setup-dev-tools.yml
+- name: Remote access
+  import_playbook: setup-remote-access.yml
+- name: Performance tuning
+  import_playbook: setup-performance-tuning.yml

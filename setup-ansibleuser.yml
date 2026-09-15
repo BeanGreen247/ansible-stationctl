@@ -1,0 +1,84 @@
+---
+# setup-ansibleuser.yml
+# Bootstrap playbook — run this ONCE per workstation before anything else.
+# Connects as root to create ansibleuser, grant sudo, and deploy your SSH key.
+#
+# If the machine already has your SSH key in root's authorized_keys:
+#   ansible-playbook setup-ansibleuser.yml -u root --limit workstations
+#
+# If root does NOT yet have your SSH key (fresh install, no key injection):
+#   ansible-playbook setup-ansibleuser.yml -u root --ask-pass
+#
+# On the bare-metal local-workstation, this can also be run directly on the
+# machine with ansible_connection=local set in inventory/hosts.ini.
+
+- name: Bootstrap ansibleuser on all workstations
+  hosts: workstations
+  gather_facts: false
+  become: true
+  ignore_unreachable: true
+
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+    ansible_host_key_checking: false
+    ansible_user_name: ansibleuser
+    ssh_public_key_file: "~/.ssh/id_rsa.pub"
+
+  tasks:
+
+  - name: Ensure sudo is installed
+    ansible.builtin.raw: |
+      if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq && apt-get install -y sudo 2>&1
+      fi
+    changed_when: false
+
+  - name: Ensure ansibleuser group exists
+    ansible.builtin.group:
+      name: "{{ ansible_user_name }}"
+      state: present
+
+  - name: Create ansibleuser
+    ansible.builtin.user:
+      name: "{{ ansible_user_name }}"
+      group: "{{ ansible_user_name }}"
+      password: "*"
+      shell: /bin/bash
+      home: "/home/{{ ansible_user_name }}"
+      create_home: true
+      state: present
+
+  - name: Grant ansibleuser passwordless sudo
+    ansible.builtin.copy:
+      dest: "/etc/sudoers.d/{{ ansible_user_name }}"
+      content: "{{ ansible_user_name }} ALL=(ALL:ALL) NOPASSWD: ALL\n"
+      owner: root
+      group: root
+      mode: "0440"
+      validate: "visudo -cf %s"
+
+  - name: Ensure .ssh directory exists for ansibleuser
+    ansible.builtin.file:
+      path: "/home/{{ ansible_user_name }}/.ssh"
+      state: directory
+      owner: "{{ ansible_user_name }}"
+      group: "{{ ansible_user_name }}"
+      mode: "0700"
+
+  - name: Deploy SSH public key for ansibleuser
+    ansible.posix.authorized_key:
+      user: "{{ ansible_user_name }}"
+      state: present
+      key: "{{ lookup('file', ssh_public_key_file) }}"
+
+  - name: Verify ansibleuser can sudo without password
+    ansible.builtin.command:
+      cmd: sudo -n true
+    become: true
+    become_user: "{{ ansible_user_name }}"
+    changed_when: false
+
+  - name: Done
+    ansible.builtin.debug:
+      msg: "ansibleuser is ready on {{ inventory_hostname }}"

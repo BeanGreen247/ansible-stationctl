@@ -1,0 +1,137 @@
+# setup-base-debian.yml
+#
+# Overview
+#   Runs on any workstation (Proxmox VM or bare-metal) to install the base
+#   tool set, harden SSH, and create the end-user login account. This is the
+#   common floor every workstation shares before desktop/dev-tool/remote-access
+#   layers go on top. Idempotent — safe to re-run any time.
+#
+# What this playbook does
+#   * Updates and upgrades APT packages
+#   * Installs debian_base_packages (see group_vars/workstations.yml)
+#   * Sets vim as the default system editor
+#   * Enables qemu-guest-agent automatically when running as a VM
+#     (detected via ansible_virtualization_role — no hardcoding per host)
+#   * Hardens SSH: key-only auth
+#   * Ensures ansibleuser has NOPASSWD sudo
+#   * Creates the end-user login account (vm_enduser_* in group_vars/all/main.yml)
+#
+# Target hosts
+#   ansible-playbook setup-base-debian.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Install base packages and harden workstation baseline
+  hosts: workstations
+  become: true
+  gather_facts: true
+  ignore_unreachable: true
+
+  tasks:
+
+  - name: Update APT package index
+    ansible.builtin.apt:
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [base, apt]
+
+  - name: Upgrade all packages to latest (safe-upgrade)
+    ansible.builtin.apt:
+      upgrade: safe
+    register: _apt_upgrade
+    tags: [base, apt, upgrade]
+
+  - name: Install base tool set
+    ansible.builtin.apt:
+      name: "{{ debian_base_packages }}"
+      state: present
+    tags: [base, packages]
+
+  - name: Set vim as default editor (update-alternatives)
+    community.general.alternatives:
+      name: editor
+      path: /usr/bin/vim.basic
+    tags: [base, config]
+
+  - name: Ensure qemu-guest-agent is enabled and started (VM only)
+    ansible.builtin.apt:
+      name: qemu-guest-agent
+      state: present
+    when: ansible_virtualization_role | default('') == 'guest'
+    tags: [base, services, qemu]
+
+  - name: Start and enable qemu-guest-agent (VM only)
+    ansible.builtin.service:
+      name: qemu-guest-agent
+      state: started
+      enabled: true
+    when: ansible_virtualization_role | default('') == 'guest'
+    tags: [base, services, qemu]
+
+  - name: Disable SSH password authentication
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?PasswordAuthentication'
+      line: 'PasswordAuthentication no'
+      validate: '/usr/sbin/sshd -t -f %s'
+    notify: Restart sshd
+    tags: [base, ssh, security]
+
+  - name: Ensure SSH PublicKeyAuthentication is enabled
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?PubkeyAuthentication'
+      line: 'PubkeyAuthentication yes'
+      validate: '/usr/sbin/sshd -t -f %s'
+    notify: Restart sshd
+    tags: [base, ssh, security]
+
+  - name: Ensure ansibleuser sudoers file is correct
+    ansible.builtin.copy:
+      content: "ansibleuser ALL=(ALL) NOPASSWD:ALL\n"
+      dest: /etc/sudoers.d/ansibleuser
+      owner: root
+      group: root
+      mode: "0440"
+      validate: "/usr/sbin/visudo -cf %s"
+    tags: [base, sudo]
+
+  - name: Create end-user account
+    ansible.builtin.user:
+      name: "{{ vm_enduser_name }}"
+      groups: "{{ vm_enduser_groups }}"
+      append: true
+      shell: "{{ vm_enduser_shell }}"
+      create_home: true
+      password: "{{ vm_enduser_password_hash | default('!') }}"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [base, users]
+
+  - name: Set SSH authorized key for end-user
+    ansible.posix.authorized_key:
+      user: "{{ vm_enduser_name }}"
+      key: "{{ lookup('file', vm_enduser_ssh_pub_key_file) }}"
+      state: present
+    when: >
+      vm_enduser_name | default('') | length > 0 and vm_enduser_ssh_pub_key_file | default('') | length > 0
+    tags: [base, users]
+
+  - name: Print base setup summary
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "Base setup complete on: {{ inventory_hostname }}"
+      - "  OS:              {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      - "  Kernel:          {{ ansible_kernel }}"
+      - "  Virtualization:  {{ ansible_virtualization_role | default('bare-metal') }}"
+      - "  Packages upgraded: {{ _apt_upgrade.changed | ternary('yes', 'no (already up to date)') }}"
+      - "  SSH:             password auth OFF, key-only"
+      - "  End-user:        {{ vm_enduser_name | default('none configured') }}"
+      - "========================================================"
+    tags: [base, summary]
+
+  handlers:
+  - name: Restart sshd
+    ansible.builtin.service:
+      name: sshd
+      state: restarted

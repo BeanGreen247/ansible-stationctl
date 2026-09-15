@@ -1,0 +1,5 @@
+# host_vars/remote-workstation/main.yml
+# Non-secret, host-specific overrides for the Proxmox-hosted VM.
+# machine_role drives the ansible_virtualization_role-independent bits that
+# only make sense on a VM (e.g. qemu-guest-agent) in setup-base-debian.yml.
+machine_role: "vm"

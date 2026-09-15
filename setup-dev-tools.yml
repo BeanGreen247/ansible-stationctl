@@ -1,0 +1,58 @@
+# setup-dev-tools.yml
+#
+# Overview
+#   Installs the day-to-day development tool set (trimmed from the reference
+#   machine's actual installed-tool audit — git, build tools, Docker, Python,
+#   Node.js, GitHub CLI). Skips anything desktop/XFCE-specific that isn't
+#   relevant to a MATE workstation.
+#
+# Target hosts
+#   ansible-playbook setup-dev-tools.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Install development tools
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  - name: Install dev tool packages
+    ansible.builtin.apt:
+      name: "{{ dev_packages }}"
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [dev, packages]
+
+  - name: Add end-user to docker group
+    ansible.builtin.user:
+      name: "{{ vm_enduser_name }}"
+      groups: docker
+      append: true
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, docker]
+
+  - name: Ensure docker service is enabled and running
+    ansible.builtin.service:
+      name: docker
+      state: started
+      enabled: true
+    tags: [dev, docker]
+
+  - name: Set global git identity for end-user
+    community.general.git_config:
+      name: "{{ item.key }}"
+      value: "{{ item.value }}"
+      scope: global
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    loop:
+      - { key: "user.name", value: "{{ git_user_name | default('') }}" }
+      - { key: "user.email", value: "{{ git_user_email | default('') }}" }
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - git_user_name | default('') | length > 0
+      - git_user_email | default('') | length > 0
+    tags: [dev, git]

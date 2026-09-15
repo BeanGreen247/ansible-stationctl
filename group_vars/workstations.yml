@@ -1,0 +1,78 @@
+# group_vars/workstations.yml
+# Shared configuration for every host in the [workstations] group.
+# Edit here once, re-run the playbooks, every workstation converges to match —
+# this file is the single source of truth for "what a stationctl workstation is".
+
+# ---------------------------------------------------------------------------
+# Resource budget (informational + drives performance tuning in
+# setup-performance-tuning.yml). Both remote-workstation (Proxmox VM) and
+# local-workstation (bare-metal ThinkPad E490) are sized the same on purpose.
+# ---------------------------------------------------------------------------
+workstation_vcpu_budget: 2
+workstation_ram_mb_budget: 4096
+
+# zram percent / algorithm / swappiness are AUTO-DETECTED from each host's
+# real ansible_memtotal_mb / ansible_processor_vcpus at run time — see the
+# tier tables in setup-performance-tuning.yml. Leave these as "auto" unless
+# you need to force a specific value for one host (set it here, or in that
+# host's host_vars/<host>/main.yml to override just one machine).
+workstation_zram_percent: "auto"
+workstation_zram_algo: "auto"
+workstation_swappiness: "auto"
+
+# ---------------------------------------------------------------------------
+# Base tool set (setup-base-debian.yml)
+# ---------------------------------------------------------------------------
+debian_base_packages:
+  - htop
+  - vim
+  - curl
+  - wget
+  - git
+  - ca-certificates
+  - gnupg
+  - unattended-upgrades
+
+# ---------------------------------------------------------------------------
+# MATE desktop (setup-mate-desktop.yml)
+# Minimal MATE stack only — deliberately avoids task-mate-desktop, which
+# pulls in LibreOffice/games/extra applets and blows the resource budget.
+# ---------------------------------------------------------------------------
+mate_packages:
+  - mate-desktop-environment-core
+  - lightdm
+  - lightdm-gtk-greeter
+  - mate-polkit
+  - dconf-cli
+  - dbus-x11
+  - arc-theme          # placeholder dark theme for the "submarine" look — swap freely
+
+mate_gtk_theme: "Arc-Dark"
+mate_marco_theme: "Arc-Dark"
+mate_icon_theme: "Adwaita"
+mate_compositing_enabled: false
+
+# ---------------------------------------------------------------------------
+# Dev tools (setup-dev-tools.yml) — trimmed to what's actually used day to day,
+# skips anything XFCE/desktop-specific from the reference machine's tool audit.
+# ---------------------------------------------------------------------------
+dev_packages:
+  - build-essential
+  - python3
+  - python3-venv
+  - python3-pip
+  - docker.io
+  - docker-compose-v2
+  - nodejs
+  - npm
+  - gh
+
+# ---------------------------------------------------------------------------
+# Remote access (setup-remote-access.yml)
+# ---------------------------------------------------------------------------
+remote_access_packages:
+  - tigervnc-standalone-server
+  - tigervnc-common
+vnc_display: "1"
+vnc_geometry: "1920x1080"
+vnc_depth: 24

@@ -1,0 +1,137 @@
+# setup-performance-tuning.yml
+#
+# Overview
+#   Tunes zram/swappiness/compression algo DYNAMICALLY from each host's
+#   actually-detected RAM and vCPU count (ansible_memtotal_mb,
+#   ansible_processor_vcpus) rather than a fixed value — so the same
+#   playbook stays correct whether a workstation ends up sized exactly to
+#   the 2 vCPU / 2-4 GB budget or drifts from it. Tier tables live in this
+#   file's vars: below; set workstation_zram_percent /
+#   workstation_swappiness / workstation_zram_algo to an explicit value in
+#   group_vars/workstations.yml (or a host_vars override) to bypass
+#   auto-detection for a specific tier.
+#
+#   Tuning approach carried over from the Starhaven homelab host's own zram
+#   tuning (~/ksm-zswap-tuning.md): single compression layer only (zram, no
+#   zswap stacked on top — that caused real decompress/recompress churn
+#   there), swappiness kept at the proven-stable kernel default (60) except
+#   at the tightest RAM tier, and no forced/background reclaim daemon — the
+#   Starhaven doc found that fights KSM and evicts hot pages. This repo has
+#   no KSM (that's a hypervisor-level homelab-host concern, not a guest
+#   workstation one) — just zram + swappiness, sized to what's actually
+#   there, biased toward performance (lighter compression algo when vCPUs
+#   are scarce) since these are 2 vCPU boxes end to end.
+#
+# Target hosts
+#   ansible-playbook setup-performance-tuning.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Apply performance tuning for the workstation resource budget
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  vars:
+    # First tier whose max_mb/max_vcpus is >= the detected value wins.
+    # Keep each list sorted ascending by its max_ threshold.
+    zram_percent_tiers:
+      - { max_mb: 1536, percent: 150 }   # very tight RAM: maximize compressed headroom
+      - { max_mb: 3072, percent: 100 }   # the 2-4GB budget's low end
+      - { max_mb: 6144, percent: 75 }    # matches Starhaven host's own chosen ratio
+      - { max_mb: 999999, percent: 50 }  # plenty of RAM: keep zram light
+
+    swappiness_tiers:
+      - { max_mb: 2048, value: 80 }      # tightest tier: swap to (fast) zram proactively
+      - { max_mb: 999999, value: 60 }    # kernel default — proven stable, no thrashing
+
+    zram_algo_tiers:
+      - { max_vcpus: 1, algo: "lz4" }    # single vCPU: favor speed over ratio
+      - { max_vcpus: 999, algo: "zstd" } # 2+ vCPUs: zstd's better ratio is worth the cost
+
+  tasks:
+
+  - name: Install zram-tools
+    ansible.builtin.apt:
+      name: zram-tools
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [perf, zram]
+
+  - name: Resolve zram percent (manual override or auto-detected from RAM)
+    ansible.builtin.set_fact:
+      _stationctl_zram_percent: >-
+        {{ workstation_zram_percent
+           if (workstation_zram_percent | default('auto') != 'auto')
+           else (zram_percent_tiers | selectattr('max_mb', '>=', ansible_memtotal_mb) | first).percent }}
+    tags: [perf, zram]
+
+  - name: Resolve zram algorithm (manual override or auto-detected from vCPU count)
+    ansible.builtin.set_fact:
+      _stationctl_zram_algo: >-
+        {{ workstation_zram_algo
+           if (workstation_zram_algo | default('auto') != 'auto')
+           else (zram_algo_tiers | selectattr('max_vcpus', '>=', ansible_processor_vcpus | default(2)) | first).algo }}
+    tags: [perf, zram]
+
+  - name: Resolve swappiness (manual override or auto-detected from RAM)
+    ansible.builtin.set_fact:
+      _stationctl_swappiness: >-
+        {{ workstation_swappiness
+           if (workstation_swappiness | default('auto') != 'auto')
+           else (swappiness_tiers | selectattr('max_mb', '>=', ansible_memtotal_mb) | first).value }}
+    tags: [perf, sysctl]
+
+  - name: Configure zram swap percentage and algorithm
+    ansible.builtin.copy:
+      dest: /etc/default/zramswap
+      content: |
+        ALGO={{ _stationctl_zram_algo }}
+        PERCENT={{ _stationctl_zram_percent }}
+        PRIORITY=100
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Restart zramswap
+    tags: [perf, zram]
+
+  - name: Set vm.swappiness via sysctl
+    ansible.posix.sysctl:
+      name: vm.swappiness
+      value: "{{ _stationctl_swappiness }}"
+      sysctl_file: /etc/sysctl.d/99-stationctl-swappiness.conf
+      state: present
+      reload: true
+    tags: [perf, sysctl]
+
+  - name: Disable unneeded services if present (best-effort, ignore missing)
+    ansible.builtin.systemd:
+      name: "{{ item }}"
+      enabled: false
+      state: stopped
+    loop:
+      - bluetooth.service
+      - cups.service
+      - ModemManager.service
+    failed_when: false
+    tags: [perf, services]
+
+  - name: Print performance tuning summary
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "Performance tuning applied on: {{ inventory_hostname }}"
+      - "  Detected:    {{ ansible_processor_vcpus | default('?') }} vCPU / {{ ansible_memtotal_mb }} MB RAM"
+      - "  zram:        {{ _stationctl_zram_percent }}% of RAM, {{ _stationctl_zram_algo }}"
+      - "  swappiness:  {{ _stationctl_swappiness }}"
+      - "  Budget:      {{ workstation_vcpu_budget }} vCPU / {{ workstation_ram_mb_budget }} MB RAM (informational target)"
+      - "========================================================"
+    tags: [perf, summary]
+
+  handlers:
+  - name: Restart zramswap
+    ansible.builtin.systemd:
+      name: zramswap
+      state: restarted
+      daemon_reload: true

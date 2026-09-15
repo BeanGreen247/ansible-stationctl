@@ -1,0 +1,148 @@
+# setup-mate-desktop.yml
+#
+# Overview
+#   Installs a minimal MATE desktop (deliberately NOT task-mate-desktop, which
+#   pulls in LibreOffice/games/extra applets) and applies a system-wide default
+#   config: a single bottom panel only, compositing off, and a dark theme as a
+#   placeholder for the "submarine" look (mate_marco_theme in group_vars).
+#
+#   Defaults are applied via /etc/dconf/db/local — a system-wide dconf profile
+#   that every user gets by default but can still override locally. This keeps
+#   the config Ansible-managed (no per-user session needed) and idempotent.
+#
+#   NOTE: the exact panel object layout (which applets, in what order) is a
+#   best-effort default written from known MATE dconf schema paths — it has
+#   not been visually verified on a live session yet. If it doesn't come out
+#   exactly right first boot, use the MATE Panel's own "Reset Panel Layout" or
+#   tweak group_vars/workstations.yml + re-run; that's the whole point of
+#   this repo being playbook-driven.
+#
+#   KNOWN LIMITATION: MATE 1.26 in Debian 13/trixie has no stable Wayland
+#   session — this is X11 only. Remote access uses TigerVNC (X11), not a
+#   Wayland remote-desktop protocol. Confirmed acceptable trade-off for the
+#   lighter resource footprint.
+#
+# Target hosts
+#   ansible-playbook setup-mate-desktop.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Install and configure minimal MATE desktop
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  - name: Install MATE desktop packages
+    ansible.builtin.apt:
+      name: "{{ mate_packages }}"
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [mate, packages]
+
+  - name: Set MATE as the default LightDM session
+    ansible.builtin.copy:
+      dest: /etc/lightdm/lightdm.conf.d/50-mate.conf
+      content: |
+        [Seat:*]
+        user-session=mate
+        greeter-session=lightdm-gtk-greeter
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [mate, lightdm]
+
+  - name: Ensure system-wide dconf profile directory exists
+    ansible.builtin.file:
+      path: /etc/dconf/db/local.d
+      state: directory
+      mode: "0755"
+    tags: [mate, dconf]
+
+  - name: Register the system 'local' dconf database for all users
+    ansible.builtin.copy:
+      dest: /etc/dconf/profile/user
+      content: |
+        user-db:user
+        system-db:local
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf]
+
+  - name: Configure single bottom panel layout (best-effort default)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/01-panel-layout
+      content: |
+        [org/mate/panel/general]
+        toplevel-id-list=['bottom']
+        object-id-list=['menu-bar', 'window-list', 'notification-area', 'clock']
+
+        [org/mate/panel/toplevels/bottom]
+        orientation='bottom'
+        size=32
+        auto-hide=false
+        expand=true
+
+        [org/mate/panel/objects/menu-bar]
+        object-type='menu-bar'
+        toplevel-id='bottom'
+        position=0
+        panel-right-stick=false
+
+        [org/mate/panel/objects/window-list]
+        object-type='applet'
+        applet-iid='WnckletFactory::WindowListApplet'
+        toplevel-id='bottom'
+        position=50
+        panel-right-stick=false
+
+        [org/mate/panel/objects/notification-area]
+        object-type='applet'
+        applet-iid='NotificationAreaAppletFactory::NotificationArea'
+        toplevel-id='bottom'
+        position=10
+        panel-right-stick=true
+
+        [org/mate/panel/objects/clock]
+        object-type='applet'
+        applet-iid='ClockAppletFactory::ClockApplet'
+        toplevel-id='bottom'
+        position=0
+        panel-right-stick=true
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf, panel]
+
+  - name: Configure theme and compositing (dark theme, compositing off for performance)
+    ansible.builtin.template:
+      src: templates/dconf-theme.ini.j2
+      dest: /etc/dconf/db/local.d/02-theme
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf, theme]
+
+  - name: Lock panel layout and theme keys so they survive login resets
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/locks/00-stationctl
+      content: |
+        /org/mate/panel/general/toplevel-id-list
+        /org/mate/marco/general/theme
+        /org/mate/marco/general/compositing-manager
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf]
+
+  handlers:
+  - name: Update dconf databases
+    ansible.builtin.command: dconf update
+    changed_when: true
