@@ -14,9 +14,14 @@ workstation_hostname: "vm-debian-workstation-01"
 # This is a Guacamole-reachable remote-desktop endpoint that should stay
 # lean in idle RAM — swap aggressively into zram (cheap, RAM-speed) rather
 # than hold onto anonymous memory, and periodically reclaim clean page
-# cache so `free -h` "used" stays low between sessions.
+# cache so `free -h` "used" stays low between sessions. Tuned hyperaggressive
+# on purpose: nothing here is a hot local dev cache worth protecting the way
+# it would be on the bare-metal local-workstation, so bias hard toward a low
+# idle footprint over avoiding reclaim churn.
 workstation_swappiness: 100
-workstation_dropcaches_interval_min: 15
+workstation_dropcaches_interval_min: 5
+workstation_zram_percent: 150
+workstation_vfs_cache_pressure: 500
 
 # Disk-swap overflow tier, as a file (not a partition — the preseed install
 # creates none, see ansible-proxmox's debian-preseed.cfg.j2 no_swap=true).

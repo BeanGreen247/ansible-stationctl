@@ -158,6 +158,20 @@
       reload: true
     tags: [perf, sysctl]
 
+  # Kernel default (100) reclaims dentry/inode cache at roughly the same
+  # rate as page cache. Raising it biases reclaim heavily toward that
+  # cache (cheap to rebuild) instead of letting it grow — set
+  # workstation_vfs_cache_pressure per-host for the aggressive endpoints,
+  # leave at the default elsewhere.
+  - name: Set vm.vfs_cache_pressure via sysctl
+    ansible.posix.sysctl:
+      name: vm.vfs_cache_pressure
+      value: "{{ workstation_vfs_cache_pressure | default(100) }}"
+      sysctl_file: /etc/sysctl.d/99-stationctl-vfs-cache-pressure.conf
+      state: present
+      reload: true
+    tags: [perf, sysctl]
+
   # Opt-in per host via workstation_dropcaches_interval_min (host_vars) — not
   # a global default. High swappiness alone does NOT shrink page cache (it
   # does the opposite: it tells the kernel to prefer swapping anonymous
@@ -240,6 +254,7 @@
       - "  Detected:    {{ ansible_processor_vcpus | default('?') }} vCPU / {{ ansible_memtotal_mb }} MB RAM"
       - "  zram:        {{ _stationctl_zram_percent }}% of RAM, {{ _stationctl_zram_algo }}"
       - "  swappiness:  {{ _stationctl_swappiness }}"
+      - "  vfs_cache_pressure: {{ workstation_vfs_cache_pressure | default(100) }}"
       - >-
         {{ "  swapfile:    %dGB at /swapfile" | format(workstation_swapfile_gb | int)
            if (workstation_swapfile_gb | default(0) | int > 0) else "  swapfile:    disabled" }}
