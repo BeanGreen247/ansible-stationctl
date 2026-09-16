@@ -115,13 +115,28 @@
     notify: Update dconf databases
     tags: [mate, dconf]
 
+  # MultiLoad only draws graphs, no persistent numeric readout — this is a
+  # separate MATE "Command" applet (runs a script on an interval, shows its
+  # stdout as panel text) placed next to the graphs for the actual MiB/GiB
+  # + percentage figure.
+  - name: Deploy RAM status script for the panel Command applet
+    ansible.builtin.copy:
+      dest: /usr/local/bin/stationctl-ram-status.sh
+      content: |
+        #!/bin/sh
+        free -m | awk '/^Mem:/ { printf "RAM: %.1fG/%.1fG (%d%%)", $3/1024, $2/1024, ($3/$2)*100 }'
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [mate, dconf, panel]
+
   - name: Configure single bottom panel layout (best-effort default)
     ansible.builtin.copy:
       dest: /etc/dconf/db/local.d/01-panel-layout
       content: |
         [org/mate/panel/general]
         toplevel-id-list=['bottom']
-        object-id-list=['menu-bar', 'window-list', 'notification-area', 'sysmonitor', 'clock']
+        object-id-list=['menu-bar', 'window-list', 'notification-area', 'ram-status', 'sysmonitor', 'clock']
 
         [org/mate/panel/toplevels/bottom]
         orientation='bottom'
@@ -148,6 +163,19 @@
         toplevel-id='bottom'
         position=10
         panel-right-stick=true
+
+        [org/mate/panel/objects/ram-status]
+        object-type='applet'
+        applet-iid='CommandAppletFactory::CommandApplet'
+        toplevel-id='bottom'
+        position=6
+        panel-right-stick=true
+
+        [org/mate/panel/objects/ram-status/prefs]
+        command='/usr/local/bin/stationctl-ram-status.sh'
+        interval=3000
+        show-icon=false
+        width=140
 
         [org/mate/panel/objects/sysmonitor]
         object-type='applet'
@@ -182,14 +210,23 @@
     notify: Update dconf databases
     tags: [mate, dconf, panel]
 
-  # false = caja never draws/manages a desktop icon layer at all (not just
-  # "hidden" — nothing gets generated in the first place).
+  # org.mate.background/show-desktop-icons is a legacy key that no longer
+  # actually controls this in MATE 1.26 — caja draws the desktop icon layer
+  # itself, governed by org.mate.caja.desktop's per-icon-type visibility
+  # keys. All false = nothing ever gets generated, not just hidden.
   - name: Disable desktop icons entirely (caja)
     ansible.builtin.copy:
       dest: /etc/dconf/db/local.d/03-no-desktop-icons
       content: |
         [org/mate/background]
         show-desktop-icons=false
+
+        [org/mate/caja/desktop]
+        home-icon-visible=false
+        computer-icon-visible=false
+        network-icon-visible=false
+        trash-icon-visible=false
+        volumes-visible=false
       owner: root
       group: root
       mode: "0644"
