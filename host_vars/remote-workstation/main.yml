@@ -22,3 +22,14 @@ workstation_dropcaches_interval_min: 15
 # creates none, see ansible-proxmox's debian-preseed.cfg.j2 no_swap=true).
 # Sits below zram in priority; zram absorbs everything until it's full.
 workstation_swapfile_gb: 8
+
+# Used by set-proxmox-notes.yml to credit both repos in the VM's Proxmox
+# notes field. VMID from ansible-proxmox/group_vars/all/vms.yml.
+proxmox_vmid: 115
+proxmox_vm_description: |
+  Managed by Ansible
+
+  Source: [BeanGreen247/ansible-proxmox](https://github.com/BeanGreen247/ansible-proxmox)
+  Source: [BeanGreen247/ansible-stationctl](https://github.com/BeanGreen247/ansible-stationctl)
+
+  Do not edit manually.

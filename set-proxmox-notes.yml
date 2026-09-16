@@ -1,0 +1,69 @@
+# set-proxmox-notes.yml
+#
+# Overview
+#   Sets each stationctl-managed VM's Proxmox notes/description field to
+#   credit both repos involved in building it — ansible-proxmox (which
+#   created the VM shell and installed the OS) and this repo (which
+#   configures everything after).
+#
+#   Deliberately does NOT store its own copy of the Proxmox API token.
+#   ansible-proxmox already vaults one (group_vars/all/main.yml there) —
+#   this reads that file directly at runtime via vars_files, assuming the
+#   two repos are checked out as siblings (~/git/ansible-proxmox and
+#   ~/git/ansible-stationctl). No credential is duplicated or stored here.
+#
+#   Only touches hosts that define proxmox_vmid in their host_vars — bare
+#   metal machines (local-workstation) have none and are skipped.
+#
+# Requirements
+#   ansible-proxmox checked out as a sibling directory, with its own
+#   group_vars/all/main.yml (vault) already set up per that repo's README.
+#
+# Target hosts
+#   ansible-playbook -i inventory/hosts.ini set-proxmox-notes.yml -e ansible_become=false
+#
+#   The -e ansible_become=false is required — ansible.cfg sets
+#   [privilege_escalation] become=True globally for the SSH-targeted
+#   workstation plays, and that config-level default beats even an
+#   explicit task-level `become: false` here. This play talks to the
+#   Proxmox API over connection:local and needs no privilege escalation
+#   at all; extra-vars is the one precedence tier that reliably overrides it.
+#
+# Credit: Thomas Mozdren
+---
+- name: Update Proxmox VM notes for stationctl-managed workstations
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+  vars_files:
+  - ../ansible-proxmox/group_vars/all/main.yml
+  vars:
+    # group_vars/all/main.yml sets ansible_become: true for the SSH-targeted
+    # workstation plays — this play only calls the Proxmox API from
+    # localhost and needs none of that.
+    ansible_become: false
+    pm_node: "{{ lookup('env', 'PM_NODE') | default('starhaven', true) }}"
+    pm_api_host: "{{ lookup('env', 'PM_API_HOST') | default('starhaven', true) }}"
+    pm_api_user: "{{ lookup('env', 'PM_API_USER') | default('root@pam', true) }}"
+    pm_api_token_id: "{{ lookup('env', 'PM_API_TOKEN_ID') | default('ansible-automation', true) }}"
+    pm_api_validate_certs: false
+
+  tasks:
+  - name: Update VM description for each workstation with a proxmox_vmid
+    community.proxmox.proxmox_kvm:
+      node: "{{ pm_node }}"
+      vmid: "{{ hostvars[item].proxmox_vmid }}"
+      description: "{{ hostvars[item].proxmox_vm_description }}"
+      update: true
+      state: present
+      api_host: "{{ pm_api_host }}"
+      api_user: "{{ pm_api_user }}"
+      api_token_id: "{{ pm_api_token_id }}"
+      api_token_secret: "{{ pm_api_token_secret }}"
+      validate_certs: "{{ pm_api_validate_certs }}"
+    become: false
+    loop: "{{ groups['workstations'] }}"
+    when: hostvars[item].proxmox_vmid is defined
+    loop_control:
+      label: "{{ item }}"
