@@ -9,6 +9,8 @@
 # What this playbook does
 #   * Updates and upgrades APT packages
 #   * Installs debian_base_packages (see group_vars/workstations.yml)
+#   * Installs broad font coverage (Noto/emoji/CJK/Nerd Fonts) so no
+#     terminal app renders tofu boxes for missing glyphs
 #   * Sets vim as the default system editor
 #   * Enables qemu-guest-agent automatically when running as a VM
 #     (detected via ansible_virtualization_role — no hardcoding per host)
@@ -60,6 +62,35 @@
       name: "{{ debian_base_packages }}"
       state: present
     tags: [base, packages]
+
+  - name: Install broad font coverage (Unicode/emoji/monospace)
+    ansible.builtin.apt:
+      name: "{{ terminal_font_packages }}"
+      state: present
+    tags: [base, fonts]
+
+  - name: Ensure per-font Nerd Fonts directories exist
+    ansible.builtin.file:
+      path: "/usr/local/share/fonts/nerd-fonts/{{ item }}"
+      state: directory
+      mode: "0755"
+    loop: "{{ nerd_fonts_names }}"
+    tags: [base, fonts]
+
+  - name: Download and extract Nerd Fonts (patched glyphs apt doesn't ship)
+    ansible.builtin.unarchive:
+      src: "https://github.com/ryanoasis/nerd-fonts/releases/download/{{ nerd_fonts_version }}/{{ item }}.zip"
+      dest: "/usr/local/share/fonts/nerd-fonts/{{ item }}"
+      remote_src: true
+    loop: "{{ nerd_fonts_names }}"
+    register: _nerd_fonts_download
+    tags: [base, fonts]
+
+  - name: Refresh system font cache
+    ansible.builtin.command: fc-cache -f
+    when: _nerd_fonts_download.changed
+    changed_when: true
+    tags: [base, fonts]
 
   - name: Set vim as default editor (update-alternatives)
     community.general.alternatives:
@@ -135,6 +166,20 @@
     ansible.builtin.copy:
       content: "ansibleuser ALL=(ALL) NOPASSWD:ALL\n"
       dest: /etc/sudoers.d/ansibleuser
+      owner: root
+      group: root
+      mode: "0440"
+      validate: "/usr/sbin/visudo -cf %s"
+    tags: [base, sudo]
+
+  # ansibleuser is NOPASSWD so this never shows for it, but the end-user
+  # account (vm_enduser_name) is in the "sudo" group and types a real
+  # password — without pwfeedback the terminal gives zero feedback per
+  # keystroke, which looks broken/hung.
+  - name: Show asterisk feedback when typing the sudo password
+    ansible.builtin.copy:
+      content: "Defaults        pwfeedback\n"
+      dest: /etc/sudoers.d/pwfeedback
       owner: root
       group: root
       mode: "0440"

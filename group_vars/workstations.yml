@@ -36,6 +36,56 @@ debian_base_packages:
   - gnupg
   - unattended-upgrades
   - rsync
+  - unzip
+  - fontconfig
+
+# ---------------------------------------------------------------------------
+# Fonts (setup-base-debian.yml) — broad Unicode/emoji/monospace coverage so
+# terminal apps (Claude Code, btop, fastfetch, MATE terminal, etc.) never hit
+# a font that's missing a glyph and falls back to a tofu box, regardless of
+# which font a terminal profile happens to use.
+# ---------------------------------------------------------------------------
+terminal_font_packages:
+  - fonts-noto
+  - fonts-noto-core
+  - fonts-noto-extra
+  - fonts-noto-ui-core
+  - fonts-noto-ui-extra
+  - fonts-noto-mono
+  - fonts-noto-cjk
+  - fonts-noto-cjk-extra
+  - fonts-noto-color-emoji
+  - fonts-dejavu
+  - fonts-liberation
+  - fonts-liberation-sans-narrow
+  - fonts-freefont-ttf
+  - fonts-firacode
+  - fonts-hack
+  - fonts-jetbrains-mono
+  - fonts-inconsolata
+  - fonts-cascadia-code
+  - fonts-powerline
+  - fonts-font-awesome
+  - fonts-symbola
+
+# Nerd Fonts — apt only has the *unpatched* upstream fonts above (plain Fira
+# Code, Hack, JetBrains Mono, ...), not the Nerd Font variants patched with
+# extra glyphs (Powerline separators, devicons, Font Awesome, etc. all in one
+# font). Pull those straight from the upstream GitHub release since Debian
+# doesn't package them. NerdFontsSymbolsOnly is just the glyph set alone,
+# meant to fontconfig-fallback onto whatever font is actually selected, so
+# icons render even in apps not explicitly configured to use a Nerd Font.
+nerd_fonts_version: "v3.2.1"
+nerd_fonts_names:
+  - FiraCode
+  - Hack
+  - JetBrainsMono
+  - Meslo
+  - SourceCodePro
+  - UbuntuMono
+  - DejaVuSansMono
+  - Iosevka
+  - NerdFontsSymbolsOnly
 
 # ---------------------------------------------------------------------------
 # MATE desktop (setup-mate-desktop.yml)
