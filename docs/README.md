@@ -116,6 +116,11 @@ Everything tunable lives in `group_vars/workstations.yml`:
 - **Add a package everywhere**: edit the relevant list in `group_vars/workstations.yml`, re-run `ansible-playbook site.yml --tags dev` (or `mate`, `perf`, etc.)
 - **Change the theme**: edit `mate_gtk_theme`/`mate_marco_theme` in `group_vars/workstations.yml`, re-run `--tags mate`
 - **Re-apply everything from scratch on one machine**: `ansible-playbook site.yml --limit remote-workstation`
+- **Reapply a config change**: every playbook here is idempotent, so after editing `group_vars/workstations.yml`, a `host_vars/*` file, or a playbook itself, just re-run `site.yml` (or the single relevant `--tags` layer) against the affected host(s) — no need to tear anything down first:
+  ```bash
+  ansible-playbook site.yml --limit remote-workstation --tags mate
+  ```
+  If `ansibleuser` already exists on the target, skip untagged/unlimited `site.yml` runs and invoke the specific playbook(s) directly instead (e.g. `ansible-playbook setup-mate-desktop.yml --limit remote-workstation`) — running `site.yml` from the top re-attempts `setup-ansibleuser.yml`'s root bootstrap, and the failed root auth can trip SSH's per-source connection-penalty and break the next play's connection for a short cooldown.
 
 ## Vault — Managing Secrets
 
