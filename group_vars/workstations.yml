@@ -62,7 +62,8 @@ dev_packages:
   - python3-venv
   - python3-pip
   - docker.io
-  - docker-compose-v2
+  - docker-cli
+  - docker-compose
   - nodejs
   - npm
   - gh
@@ -73,6 +74,7 @@ dev_packages:
 remote_access_packages:
   - tigervnc-standalone-server
   - tigervnc-common
+  - tigervnc-tools
 vnc_display: "1"
 vnc_geometry: "1920x1080"
 vnc_depth: 24

@@ -96,6 +96,23 @@
       validate: "/usr/sbin/visudo -cf %s"
     tags: [base, sudo]
 
+  # vm_enduser_groups commonly includes "docker", which doesn't exist yet at
+  # this point in site.yml (setup-dev-tools.yml, which installs docker.io
+  # and thereby creates that group, runs later) — pre-create any named
+  # groups so user creation doesn't fail on a fresh host.
+  - name: Ensure end-user's groups exist
+    ansible.builtin.group:
+      name: "{{ item }}"
+      state: present
+    loop: "{{ vm_enduser_groups.split(',') }}"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [base, users]
+
+  - name: Set system timezone
+    community.general.timezone:
+      name: "{{ workstation_timezone | default('Europe/Prague') }}"
+    tags: [base, config]
+
   - name: Create end-user account
     ansible.builtin.user:
       name: "{{ vm_enduser_name }}"

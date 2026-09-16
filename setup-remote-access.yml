@@ -3,15 +3,17 @@
 # Overview
 #   Wires up remote access for the workstation: TigerVNC (X11 — see the
 #   Wayland limitation noted in setup-mate-desktop.yml) launching a MATE
-#   session, run as a proper systemd service, plus Tailscale for private
-#   network reachability (matches the existing homelab pattern — no exposed
-#   ports, same as the Starhaven homelab).
+#   session, using the package-provided tigervncserver@:N.service (NOT a
+#   custom unit — trixie's tigervnc-standalone-server ships its own
+#   tigervncsession-start/vncserver.users mechanism and a hand-rolled unit
+#   fighting its PID-file/hostname conventions just times out), plus
+#   Tailscale for private network reachability (matches the existing
+#   homelab pattern — no exposed ports, same as the Starhaven homelab).
 #
-#   SECURITY NOTE: this playbook does NOT set the VNC password — that's a
-#   secret and stays out of the repo per policy. One-time manual step after
-#   the first run:
-#     ssh <user>@<workstation> 'vncpasswd'
-#   or scp a pre-made ~/.vnc/passwd file into place yourself.
+#   VNC password: set non-interactively from vnc_password (vault-encrypted
+#   in group_vars/all/main.yml, which is gitignored — same pattern as
+#   vault_become_password). This is what you enter as the connection
+#   password when adding this workstation in Guacamole.
 #
 # Target hosts
 #   ansible-playbook setup-remote-access.yml --limit workstations
@@ -43,33 +45,99 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [remote-access, vnc]
 
-  - name: Deploy VNC xstartup (launches MATE session)
-    ansible.builtin.copy:
-      dest: "/home/{{ vm_enduser_name }}/.vnc/xstartup"
-      content: |
-        #!/bin/sh
-        unset SESSION_MANAGER
-        unset DBUS_SESSION_BUS_ADDRESS
-        exec dbus-launch --exit-with-session mate-session
+  # TigerVNC on trixie migrates ~/.vnc to the XDG path ~/.config/tigervnc on
+  # first run (File::Copy::mv, which needs the parent dir to already exist —
+  # it won't create ~/.config itself). Without this, vncserver fails with
+  # "Could not migrate ~/.vnc to ~/.config/tigervnc."
+  - name: Ensure end-user's .config directory exists (tigervnc XDG migration target)
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config"
+      state: directory
       owner: "{{ vm_enduser_name }}"
       group: "{{ vm_enduser_name }}"
-      mode: "0755"
+      mode: "0700"
     when: vm_enduser_name | default('') | length > 0
     tags: [remote-access, vnc]
 
-  - name: Deploy stationctl-vncserver systemd template unit
-    ansible.builtin.template:
-      src: templates/stationctl-vncserver@.service.j2
-      dest: /etc/systemd/system/stationctl-vncserver@.service
-      owner: root
-      group: root
-      mode: "0644"
+  # No custom ~/.vnc/xstartup here on purpose: it would take priority over
+  # $session below (see tigervncsession(8) FILES) and bypass the packaged
+  # session-selection mechanism entirely.
+  - name: Remove any legacy per-user xstartup (would override $session)
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.vnc/xstartup"
+      state: absent
+    when: vm_enduser_name | default('') | length > 0
+    tags: [remote-access, vnc]
+
+  - name: Set VNC session password non-interactively (tigervncpasswd -f)
+    ansible.builtin.shell: |
+      set -o pipefail
+      printf '%s\n' "{{ vnc_password }}" | tigervncpasswd -f > /home/{{ vm_enduser_name }}/.vnc/passwd
+    args:
+      executable: /bin/bash
+      creates: "/home/{{ vm_enduser_name }}/.vnc/passwd"
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    no_log: true
+    when: vm_enduser_name | default('') | length > 0
+    tags: [remote-access, vnc]
+
+  - name: Lock down VNC password file permissions
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.vnc/passwd"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0600"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [remote-access, vnc]
+
+  - name: Remove old stationctl-vncserver custom unit if present (superseded)
+    ansible.builtin.systemd:
+      name: "stationctl-vncserver@{{ vnc_display }}"
+      state: stopped
+      enabled: false
+    failed_when: false
+    tags: [remote-access, vnc, systemd]
+
+  - name: Remove old stationctl-vncserver unit file
+    ansible.builtin.file:
+      path: /etc/systemd/system/stationctl-vncserver@.service
+      state: absent
     notify: Reload systemd
     tags: [remote-access, vnc, systemd]
 
-  - name: Enable and start VNC server on configured display
+  - name: Assign VNC display to end-user (/etc/tigervnc/vncserver.users)
+    ansible.builtin.lineinfile:
+      path: /etc/tigervnc/vncserver.users
+      regexp: "^:{{ vnc_display }}="
+      line: ":{{ vnc_display }}={{ vm_enduser_name }}"
+      create: true
+      owner: root
+      group: root
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [remote-access, vnc, systemd]
+
+  - name: Set system-wide policy for the VNC session (geometry/depth/session/security)
+    ansible.builtin.copy:
+      dest: /etc/tigervnc/vncserver-config-mandatory
+      content: |
+        # Managed by ansible-stationctl (setup-remote-access.yml). Mandatory =
+        # always wins over any per-user ~/.config/tigervnc/config.pl.
+        $geometry = "{{ vnc_geometry }}";
+        $depth = {{ vnc_depth }};
+        $session = "mate";
+        $localhost = "no";
+        $SecurityTypes = "VncAuth";
+        1;
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [remote-access, vnc, systemd]
+
+  - name: Enable and start the packaged VNC server on configured display
     ansible.builtin.systemd:
-      name: "stationctl-vncserver@{{ vnc_display }}"
+      name: "tigervncserver@:{{ vnc_display }}.service"
       state: started
       enabled: true
       daemon_reload: true
@@ -101,7 +169,7 @@
       - "========================================================"
       - "Remote access ready on: {{ inventory_hostname }}"
       - "  VNC display:  :{{ vnc_display }} ({{ vnc_geometry }}, {{ vnc_depth }}bpp)"
-      - "  VNC password: NOT set by Ansible — run 'vncpasswd' as {{ vm_enduser_name }}"
+      - "  VNC password: set from vnc_password in group_vars/all/main.yml (vault)"
       - "  Tailscale:    installed, run 'tailscale up' once to authenticate"
       - "========================================================"
     tags: [remote-access, summary]

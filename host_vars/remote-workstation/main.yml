@@ -3,3 +3,10 @@
 # machine_role drives the ansible_virtualization_role-independent bits that
 # only make sense on a VM (e.g. qemu-guest-agent) in setup-base-debian.yml.
 machine_role: "vm"
+
+# This is a Guacamole-reachable remote-desktop endpoint that should stay
+# lean in idle RAM — swap aggressively into zram (cheap, RAM-speed) rather
+# than hold onto anonymous memory, and periodically reclaim clean page
+# cache so `free -h` "used" stays low between sessions.
+workstation_swappiness: 100
+workstation_dropcaches_interval_min: 15

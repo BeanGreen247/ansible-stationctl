@@ -105,6 +105,68 @@
       reload: true
     tags: [perf, sysctl]
 
+  # Opt-in per host via workstation_dropcaches_interval_min (host_vars) — not
+  # a global default. High swappiness alone does NOT shrink page cache (it
+  # does the opposite: it tells the kernel to prefer swapping anonymous
+  # memory over evicting cache). To also keep idle "used" RAM low, actively
+  # drop *clean* page cache on a timer. Mode 1 only (page cache), never
+  # dentries/inodes (mode 2/3) — cheap to rebuild, no data loss since it's
+  # clean cache only.
+  - name: Deploy drop_caches oneshot service
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/stationctl-dropcaches.service
+      content: |
+        [Unit]
+        Description=Proactively drop clean page cache (stationctl)
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c 'sync; echo 1 > /proc/sys/vm/drop_caches'
+      owner: root
+      group: root
+      mode: "0644"
+    when: workstation_dropcaches_interval_min | default(0) | int > 0
+    notify: Reload systemd
+    tags: [perf, cache]
+
+  - name: Deploy drop_caches timer
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/stationctl-dropcaches.timer
+      content: |
+        [Unit]
+        Description=Periodic clean page cache reclaim (stationctl)
+
+        [Timer]
+        OnBootSec={{ workstation_dropcaches_interval_min }}min
+        OnUnitActiveSec={{ workstation_dropcaches_interval_min }}min
+
+        [Install]
+        WantedBy=timers.target
+      owner: root
+      group: root
+      mode: "0644"
+    when: workstation_dropcaches_interval_min | default(0) | int > 0
+    notify: Reload systemd
+    tags: [perf, cache]
+
+  - name: Enable and start drop_caches timer
+    ansible.builtin.systemd:
+      name: stationctl-dropcaches.timer
+      state: started
+      enabled: true
+      daemon_reload: true
+    when: workstation_dropcaches_interval_min | default(0) | int > 0
+    tags: [perf, cache]
+
+  - name: Ensure drop_caches timer is disabled where not configured
+    ansible.builtin.systemd:
+      name: stationctl-dropcaches.timer
+      state: stopped
+      enabled: false
+    when: workstation_dropcaches_interval_min | default(0) | int <= 0
+    failed_when: false
+    tags: [perf, cache]
+
   - name: Disable unneeded services if present (best-effort, ignore missing)
     ansible.builtin.systemd:
       name: "{{ item }}"
@@ -125,6 +187,9 @@
       - "  Detected:    {{ ansible_processor_vcpus | default('?') }} vCPU / {{ ansible_memtotal_mb }} MB RAM"
       - "  zram:        {{ _stationctl_zram_percent }}% of RAM, {{ _stationctl_zram_algo }}"
       - "  swappiness:  {{ _stationctl_swappiness }}"
+      - >-
+        {{ "  drop_caches: every %dmin (page cache only)" | format(workstation_dropcaches_interval_min | int)
+           if (workstation_dropcaches_interval_min | default(0) | int > 0) else "  drop_caches: disabled" }}
       - "  Budget:      {{ workstation_vcpu_budget }} vCPU / {{ workstation_ram_mb_budget }} MB RAM (informational target)"
       - "========================================================"
     tags: [perf, summary]
@@ -134,4 +199,8 @@
     ansible.builtin.systemd:
       name: zramswap
       state: restarted
+      daemon_reload: true
+
+  - name: Reload systemd
+    ansible.builtin.systemd:
       daemon_reload: true
