@@ -101,7 +101,7 @@ ansible-playbook site.yml --tags mate
 
 Everything tunable lives in `group_vars/workstations.yml`:
 
-- `workstation_vcpu_budget` / `workstation_ram_mb_budget` — informational, documents the target envelope
+- vCPU/RAM sizing is NOT in this repo — it lives in `ansible-proxmox/group_vars/all/vms.yml` (the `vm-debian-workstation-01` entry). Change it there and re-run `create-vm-from-iso-proxmox.yml`, not here.
 - `workstation_zram_percent` / `workstation_swappiness` — performance tuning knobs
 - `debian_base_packages`, `mate_packages`, `dev_packages`, `remote_access_packages` — the package lists that define "the environment"
 - `mate_gtk_theme` / `mate_marco_theme` / `mate_icon_theme` — currently `Arc-Dark` as a placeholder for the "submarine" look; swap freely

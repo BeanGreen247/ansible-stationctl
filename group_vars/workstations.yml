@@ -4,12 +4,15 @@
 # this file is the single source of truth for "what a stationctl workstation is".
 
 # ---------------------------------------------------------------------------
-# Resource budget (informational + drives performance tuning in
-# setup-performance-tuning.yml). Both remote-workstation (Proxmox VM) and
-# local-workstation (bare-metal ThinkPad E490) are sized the same on purpose.
-# ---------------------------------------------------------------------------
-workstation_vcpu_budget: 2
-workstation_ram_mb_budget: 4096
+# Resource budget — REMOVED. This used to duplicate the VM's real memory/cores,
+# which actually live in ansible-proxmox/group_vars/all/vms.yml (vm-debian-workstation-01).
+# That file is the single source of truth for CPU/RAM — change it there, not here,
+# and re-run create-vm-from-iso-proxmox.yml. Kept the two in sync by hand was the
+# actual source of confusion, so setup-performance-tuning.yml now prints the real
+# detected values (ansible_processor_vcpus / ansible_memtotal_mb) instead of a
+# separate hardcoded budget.
+# workstation_vcpu_budget: 2
+# workstation_ram_mb_budget: 4096
 
 # zram percent / algorithm / swappiness are AUTO-DETECTED from each host's
 # real ansible_memtotal_mb / ansible_processor_vcpus at run time — see the

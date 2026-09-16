@@ -246,7 +246,7 @@
       - >-
         {{ "  drop_caches: every %dmin (page cache only)" | format(workstation_dropcaches_interval_min | int)
            if (workstation_dropcaches_interval_min | default(0) | int > 0) else "  drop_caches: disabled" }}
-      - "  Budget:      {{ workstation_vcpu_budget }} vCPU / {{ workstation_ram_mb_budget }} MB RAM (informational target)"
+      - "  Sizing:      change vCPU/RAM in ansible-proxmox/group_vars/all/vms.yml (vm-debian-workstation-01), not here"
       - "========================================================"
     tags: [perf, summary]
 
