@@ -32,6 +32,7 @@ debian_base_packages:
   - ca-certificates
   - gnupg
   - unattended-upgrades
+  - rsync
 
 # ---------------------------------------------------------------------------
 # MATE desktop (setup-mate-desktop.yml)
@@ -67,6 +68,35 @@ dev_packages:
   - nodejs
   - npm
   - gh
+  - ansible
+  - mousepad
+  - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
+  - idle          # provides idlelib, used by some homegrown editor scripts
+
+# ---------------------------------------------------------------------------
+# Python (pip) tooling used by the custom scripts that live in this
+# workstation's home dir (ansible-proxmox-ssh-gui-tool, OptiPing, the
+# starhaven node exporter, crafty tweaks). Debian 13 is PEP 668
+# "externally managed" — installed with --break-system-packages in
+# setup-dev-tools.yml, matching how they're actually installed on Nebula.
+#
+# This list is a living baseline, not a per-app pin — as game-port build
+# work starts, add build/runtime libs here (SDL2, cmake, etc.) rather than
+# installing them ad hoc on one machine.
+# ---------------------------------------------------------------------------
+workstation_pip_packages:
+  - customtkinter
+  - fastapi
+  - "uvicorn[standard]"
+  - aiohttp
+  - ping3
+  - toml
+  - python-socketio
+  - python-multipart
+  - pyotp
+  - qrcode
+  - prometheus_client
+  - peewee
 
 # ---------------------------------------------------------------------------
 # Remote access (setup-remote-access.yml)

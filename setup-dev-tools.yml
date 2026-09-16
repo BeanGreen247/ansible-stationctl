@@ -26,6 +26,13 @@
       cache_valid_time: 3600
     tags: [dev, packages]
 
+  - name: Install pip tooling for the custom scripts in this workstation's home dir
+    ansible.builtin.pip:
+      name: "{{ workstation_pip_packages }}"
+      extra_args: --break-system-packages
+    when: workstation_pip_packages | default([]) | length > 0
+    tags: [dev, pip]
+
   - name: Add end-user to docker group
     ansible.builtin.user:
       name: "{{ vm_enduser_name }}"

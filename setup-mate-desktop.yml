@@ -42,6 +42,34 @@
       cache_valid_time: 3600
     tags: [mate, packages]
 
+  - name: Ensure /etc/apt/keyrings exists (for Brave's signed-by repo)
+    ansible.builtin.file:
+      path: /etc/apt/keyrings
+      state: directory
+      mode: "0755"
+    tags: [mate, browser]
+
+  - name: Add Brave browser apt signing key
+    ansible.builtin.get_url:
+      url: https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+      dest: /etc/apt/keyrings/brave-browser-archive-keyring.gpg
+      mode: "0644"
+    tags: [mate, browser]
+
+  - name: Add Brave browser apt repository
+    ansible.builtin.apt_repository:
+      repo: "deb [signed-by=/etc/apt/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main"
+      filename: brave-browser-release
+      state: present
+      update_cache: true
+    tags: [mate, browser]
+
+  - name: Install Brave browser
+    ansible.builtin.apt:
+      name: brave-browser
+      state: present
+    tags: [mate, browser]
+
   - name: Ensure lightdm.conf.d directory exists
     ansible.builtin.file:
       path: /etc/lightdm/lightdm.conf.d
