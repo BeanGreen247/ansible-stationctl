@@ -102,6 +102,13 @@
   # preseed/debian-preseed.cfg.j2's no_swap=true — the installer creates no
   # swap partition at all now) and can be resized later without touching
   # the partition table, unlike the swap partition this replaced on VMID 115.
+  #
+  # NOTE: VMID 115 (remote-workstation) still has a leftover 4G /dev/sda5
+  # swap partition from the original preseed ISO run, active alongside zram
+  # and /swapfile (see /etc/fstab — "swap was on /dev/sda5 during
+  # installation"). It's a known artifact, not something this repo created
+  # or manages, and it sits at a lower swap priority than zram/swapfile —
+  # safe to ignore.
   # No dedicated "create a swapfile" module exists in ansible.builtin/
   # community.general — fallocate + creates: guard is the standard pattern.
   # To resize later, remove /swapfile first (this won't touch an existing one).
