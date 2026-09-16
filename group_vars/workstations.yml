@@ -47,6 +47,7 @@ mate_packages:
   - dconf-cli
   - dbus-x11
   - arc-theme          # placeholder dark theme for the "submarine" look — swap freely
+  - mate-applets       # for the panel's System Monitor (multiload: cpu/mem/net/swap) applet
 
 mate_gtk_theme: "Arc-Dark"
 mate_marco_theme: "Arc-Dark"

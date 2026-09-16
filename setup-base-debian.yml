@@ -82,6 +82,37 @@
     when: ansible_virtualization_role | default('') == 'guest'
     tags: [base, services, qemu]
 
+  # Remote-desktop endpoints must never sleep/suspend/hibernate — there's no
+  # physical way to wake a headless VM back up, and a suspended guest just
+  # looks like a dead VNC/Guacamole connection. Mask the systemd targets
+  # (belt) and tell logind to ignore idle/lid/power-key triggers
+  # (suspenders) — mate-power-manager isn't installed so it can't
+  # independently trigger a suspend either.
+  - name: Mask systemd sleep/suspend/hibernate targets
+    ansible.builtin.systemd:
+      name: "{{ item }}"
+      masked: true
+    loop:
+      - sleep.target
+      - suspend.target
+      - hibernate.target
+      - hybrid-sleep.target
+    tags: [base, power]
+
+  - name: Disable logind idle/lid/power-key suspend triggers
+    ansible.builtin.lineinfile:
+      path: /etc/systemd/logind.conf
+      regexp: "^#?{{ item.key }}="
+      line: "{{ item.key }}={{ item.value }}"
+    loop:
+      - { key: "HandleSuspendKey", value: "ignore" }
+      - { key: "HandleHibernateKey", value: "ignore" }
+      - { key: "HandleLidSwitch", value: "ignore" }
+      - { key: "HandleLidSwitchExternalPower", value: "ignore" }
+      - { key: "IdleAction", value: "ignore" }
+    notify: Restart logind
+    tags: [base, power]
+
   - name: Disable SSH password authentication
     ansible.builtin.lineinfile:
       path: /etc/ssh/sshd_config
@@ -165,4 +196,9 @@
   - name: Restart sshd
     ansible.builtin.service:
       name: sshd
+      state: restarted
+
+  - name: Restart logind
+    ansible.builtin.systemd:
+      name: systemd-logind
       state: restarted

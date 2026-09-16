@@ -121,7 +121,7 @@
       content: |
         [org/mate/panel/general]
         toplevel-id-list=['bottom']
-        object-id-list=['menu-bar', 'window-list', 'notification-area', 'clock']
+        object-id-list=['menu-bar', 'window-list', 'notification-area', 'sysmonitor', 'clock']
 
         [org/mate/panel/toplevels/bottom]
         orientation='bottom'
@@ -149,6 +149,23 @@
         position=10
         panel-right-stick=true
 
+        [org/mate/panel/objects/sysmonitor]
+        object-type='applet'
+        applet-iid='MultiLoadAppletFactory::MultiLoadApplet'
+        toplevel-id='bottom'
+        position=5
+        panel-right-stick=true
+
+        [org/mate/panel/objects/sysmonitor/prefs]
+        view-cpuload=true
+        view-memload=true
+        view-netload=true
+        view-swapload=true
+        view-diskload=false
+        view-loadavg=false
+        speed=2000
+        size=40
+
         [org/mate/panel/objects/clock]
         object-type='applet'
         applet-iid='ClockAppletFactory::ClockApplet'
@@ -158,11 +175,26 @@
 
         [org/mate/panel/objects/clock/prefs]
         show-seconds=true
+        show-date=true
       owner: root
       group: root
       mode: "0644"
     notify: Update dconf databases
     tags: [mate, dconf, panel]
+
+  # false = caja never draws/manages a desktop icon layer at all (not just
+  # "hidden" — nothing gets generated in the first place).
+  - name: Disable desktop icons entirely (caja)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/03-no-desktop-icons
+      content: |
+        [org/mate/background]
+        show-desktop-icons=false
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf, desktop]
 
   - name: Configure theme and compositing (dark theme, compositing off for performance)
     ansible.builtin.template:
