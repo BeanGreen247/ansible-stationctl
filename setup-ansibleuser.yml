@@ -27,6 +27,14 @@
 
   tasks:
 
+  # The preseed installer leaves a `deb cdrom:[...]` line as the first apt
+  # source, which makes `apt-get update` exit non-zero (no CD-ROM present)
+  # even though the real mirror lines below it are fine — breaks every apt
+  # operation on a fresh box until removed.
+  - name: Strip the leftover cdrom apt source from a fresh preseed install
+    ansible.builtin.raw: sed -i '/^deb cdrom:/d' /etc/apt/sources.list
+    changed_when: false
+
   - name: Ensure sudo is installed
     ansible.builtin.raw: |
       if command -v apt-get >/dev/null 2>&1; then
