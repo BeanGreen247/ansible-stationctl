@@ -75,6 +75,92 @@ dev_packages:
   - keepassxc
 
 # ---------------------------------------------------------------------------
+# Sysadmin/dev CLI toolkit, curated from github.com/BeanGreen247/kubuntu-setup
+# (the user's own reference desktop provisioning script) — trimmed to what's
+# actually relevant on a headless-ish MATE VM: dropped KDE-specific packages,
+# firmware/microcode (host-level, not a VM concern), media codecs, Windows
+# fonts, and GUI apps with their own apt repos (Chrome/Signal/Spotify/
+# HashiCorp) that weren't asked for. clang/meson/ninja/valgrind are here
+# specifically for the future game-port build work.
+# ---------------------------------------------------------------------------
+sysadmin_cli_packages:
+  # debugging / build
+  - gdb
+  - strace
+  - ltrace
+  - clang
+  - lldb
+  - meson
+  - ninja-build
+  - valgrind
+  - shellcheck
+  # git extras
+  - git-lfs
+  - tig
+  # shell / editors
+  - nano
+  - tmux
+  - screen
+  - btop
+  - fastfetch
+  # modern CLI replacements (bat->batcat, fd->fdfind — symlinked below)
+  - tree
+  - bat
+  - fd-find
+  - ripgrep
+  - fzf
+  - zoxide
+  - duf
+  - ncdu
+  # archives
+  - jq
+  - p7zip-full
+  - unzip
+  - unrar-free  # real "unrar" needs Debian's non-free component enabled — skip that for one package
+  - xz-utils
+  # transfer / remote
+  - rclone
+  - sshfs
+  - sshpass
+  - aria2
+  - httpie
+  # networking / diagnostics
+  - nmap
+  - ncat
+  - netcat-openbsd
+  - tcpdump
+  - traceroute
+  - mtr-tiny
+  - net-tools
+  - ipcalc
+  - socat
+  - iperf3
+  - arp-scan
+  - whois
+  - mosh
+  - bind9-dnsutils
+  - bind9-host
+  # system / hardware info
+  - lsof
+  - pciutils
+  - usbutils
+  - dmidecode
+  - lshw
+  - hwinfo
+  - inxi
+  # python extras
+  - python3-dev
+  - pipx
+  # misc
+  - xclip
+  - xsel
+  - pv
+  - moreutils
+  - parallel
+  - entr
+  - libnotify-bin
+
+# ---------------------------------------------------------------------------
 # Python (pip) tooling used by the custom scripts that live in this
 # workstation's home dir (ansible-proxmox-ssh-gui-tool, OptiPing, the
 # starhaven node exporter, crafty tweaks). Debian 13 is PEP 668

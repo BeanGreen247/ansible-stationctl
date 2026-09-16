@@ -61,6 +61,27 @@
       cache_valid_time: 3600
     tags: [dev, packages]
 
+  - name: Install sysadmin/dev CLI toolkit (curated from kubuntu-setup)
+    ansible.builtin.apt:
+      name: "{{ sysadmin_cli_packages }}"
+      state: present
+    when: sysadmin_cli_packages | default([]) | length > 0
+    tags: [dev, packages, cli-tools]
+
+  # Debian ships these under their historical names to avoid clashing with
+  # older unrelated packages already using "bat"/"fd" — same fix
+  # kubuntu-setup applies.
+  - name: Symlink bat/fd to their upstream names
+    ansible.builtin.file:
+      src: "{{ item.src }}"
+      dest: "{{ item.dest }}"
+      state: link
+    loop:
+      - { src: /usr/bin/batcat, dest: /usr/local/bin/bat }
+      - { src: /usr/bin/fdfind, dest: /usr/local/bin/fd }
+    when: sysadmin_cli_packages | default([]) | length > 0
+    tags: [dev, packages, cli-tools]
+
   - name: Install pip tooling for the custom scripts in this workstation's home dir
     ansible.builtin.pip:
       name: "{{ workstation_pip_packages }}"
