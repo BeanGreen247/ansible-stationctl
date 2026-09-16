@@ -69,17 +69,23 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [remote-access, vnc]
 
+  # No `creates:` guard here on purpose: this file can get silently
+  # replaced by something else with the same name (e.g. a stray home-dir
+  # sync from another machine) — a `creates:` guard would then leave the
+  # wrong password in place forever since the file already "exists".
+  # tigervncpasswd's output is deterministic for a given password (DES,
+  # no salt), so unconditionally rewriting it is idempotent in effect.
   - name: Set VNC session password non-interactively (tigervncpasswd -f)
     ansible.builtin.shell: |
       set -o pipefail
       printf '%s\n' "{{ vnc_password }}" | tigervncpasswd -f > /home/{{ vm_enduser_name }}/.vnc/passwd
     args:
       executable: /bin/bash
-      creates: "/home/{{ vm_enduser_name }}/.vnc/passwd"
     become: true
     become_user: "{{ vm_enduser_name }}"
     no_log: true
     when: vm_enduser_name | default('') | length > 0
+    notify: Restart VNC server
     tags: [remote-access, vnc]
 
   - name: Lock down VNC password file permissions
@@ -178,3 +184,9 @@
   - name: Reload systemd
     ansible.builtin.systemd:
       daemon_reload: true
+
+  - name: Restart VNC server
+    ansible.builtin.systemd:
+      name: "tigervncserver@:{{ vnc_display }}.service"
+      state: restarted
+    failed_when: false
