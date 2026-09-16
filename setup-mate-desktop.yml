@@ -89,6 +89,20 @@
       mode: "0644"
     tags: [mate, lightdm]
 
+  # lightdm-gtk-greeter is still installed (harmless, small) and the
+  # 50-mate.conf above keeps its session config correct in case it's ever
+  # started manually, but sessions here are exclusively remote via TigerVNC
+  # (setup-remote-access.yml) — there's no local console user waiting at a
+  # greeter. Stopped/disabled so it doesn't burn RAM/GPU on the framebuffer
+  # or fight VNC for the display.
+  - name: Stop and disable lightdm service (VNC-only workstation, no local console login)
+    ansible.builtin.systemd:
+      name: lightdm
+      state: stopped
+      enabled: false
+      masked: true
+    tags: [mate, lightdm]
+
   - name: Ensure system-wide dconf profile directory exists
     ansible.builtin.file:
       path: /etc/dconf/db/local.d
