@@ -257,6 +257,7 @@
         /org/mate/panel/general/toplevel-id-list
         /org/mate/marco/general/theme
         /org/mate/marco/general/compositing-manager
+        /org/mate/desktop/interface/monospace-font-name
       owner: root
       group: root
       mode: "0644"

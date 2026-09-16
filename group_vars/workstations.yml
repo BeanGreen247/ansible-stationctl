@@ -67,6 +67,14 @@ terminal_font_packages:
   - fonts-powerline
   - fonts-font-awesome
   - fonts-symbola
+  - fonts-unifont
+  - fonts-elusive-icons
+  - fonts-fork-awesome
+  - fonts-glyphicons-halflings
+  - fonts-material-design-icons-iconfont
+  - fonts-materialdesignicons-webfont
+  - fonts-opensymbol
+  - fonts-weather-icons
 
 # Nerd Fonts — apt only has the *unpatched* upstream fonts above (plain Fira
 # Code, Hack, JetBrains Mono, ...), not the Nerd Font variants patched with
@@ -106,6 +114,12 @@ mate_gtk_theme: "Arc-Dark"
 mate_marco_theme: "Arc-Dark"
 mate_icon_theme: "Adwaita"
 mate_compositing_enabled: false
+
+# System-wide monospace font — a Nerd Font *Mono* variant so terminal apps
+# get code + icon glyphs (Powerline, devicons, etc.) from a single font
+# instead of relying on fontconfig fallback picking the right glyph from a
+# separate symbols-only font (which VTE doesn't always do consistently).
+mate_monospace_font: "FiraCode Nerd Font Mono 13"
 
 # ---------------------------------------------------------------------------
 # Dev tools (setup-dev-tools.yml) — trimmed to what's actually used day to day,
