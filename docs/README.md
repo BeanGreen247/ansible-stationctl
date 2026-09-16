@@ -16,6 +16,7 @@
 8. [Day-to-Day Operations](#day-to-day-operations)
 9. [Vault — Managing Secrets](#vault--managing-secrets)
 10. [Known Limitations](#known-limitations)
+11. [Pending Tasks](#pending-tasks)
 
 ---
 
@@ -131,3 +132,13 @@ Same pattern as `ansible-proxmox`: `~/.vault_pass.txt` (outside any repo, `chmod
 - **MATE is X11-only** in Debian 13/trixie — no stable Wayland session (unlike the KDE Plasma setup on this same laptop's existing install). Remote access uses TigerVNC (X11), not a Wayland remote-desktop protocol. Deliberate trade-off for the lighter resource footprint.
 - **VNC password and Tailscale auth are manual, one-time steps** — they're secrets/interactive-auth flows that intentionally stay out of the playbooks and the repo.
 - **Panel layout is a best-effort dconf default** — written from known MATE dconf schema paths but not yet visually verified on a live session. Use MATE Panel's own reset/tweak if it's not pixel-perfect on first boot, then encode the fix back into the playbook.
+
+## Pending Tasks
+
+- **`local-workstation` swap/disk policy decision** — `setup-performance-tuning.yml` now auto-retires any swap partition that isn't zram/`/swapfile` and grows root into the freed space (see the "Reclaim trailing swap-only partition space" task). This was rolled out and verified on `remote-workstation` (VMID 115) only. `local-workstation` (bare-metal ThinkPad E490) has **not** been touched yet — do this once there's time to do it carefully on real hardware, not a VM:
+  1. Confirm `local-workstation`'s actual partition layout first (`lsblk -f`, `fdisk -l` or `sfdisk -d` on the real disk) — bare metal may have a different layout than the VM's preseed (e.g. a Debian installer default swap partition that's genuinely load-bearing, not a leftover).
+  2. Decide per that layout: if `local-workstation` is meant to keep a real swap partition, add `workstation_remove_legacy_swap_partitions: false` to `host_vars/local-workstation/main.yml` **before** the first `setup-performance-tuning.yml` run against it — otherwise the first run will swapoff/retire/wipe it and reclaim the space into root.
+  3. If it should follow the same zram + `/swapfile`-only policy as `remote-workstation`, leave the var unset (defaults to `true`) and just make sure `workstation_swapfile_gb` is sized sensibly for the laptop's actual disk/RAM before running.
+  4. Take a backup/snapshot appropriate for bare metal (there's no Proxmox snapshot safety net here) before the first `--tags perf` run, since the root-fs-grow step edits the live partition table.
+  5. Dry-run first: `ansible-playbook setup-performance-tuning.yml --limit local-workstation --check --diff`, review the "root fs:" summary line, then run for real without `--check`.
+  6. Uncomment `local-workstation`'s line in `inventory/hosts.ini` once the machine is reachable over SSH as `ansibleuser` (it's currently commented out, IP not filled in).
