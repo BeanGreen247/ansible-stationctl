@@ -72,6 +72,7 @@ dev_packages:
   - mousepad
   - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
   - idle          # provides idlelib, used by some homegrown editor scripts
+  - keepassxc
 
 # ---------------------------------------------------------------------------
 # Python (pip) tooling used by the custom scripts that live in this
