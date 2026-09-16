@@ -17,3 +17,8 @@ workstation_hostname: "vm-debian-workstation-01"
 # cache so `free -h` "used" stays low between sessions.
 workstation_swappiness: 100
 workstation_dropcaches_interval_min: 15
+
+# Disk-swap overflow tier, as a file (not a partition — the preseed install
+# creates none, see ansible-proxmox's debian-preseed.cfg.j2 no_swap=true).
+# Sits below zram in priority; zram absorbs everything until it's full.
+workstation_swapfile_gb: 8

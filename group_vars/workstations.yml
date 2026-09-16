@@ -65,8 +65,7 @@ dev_packages:
   - docker.io
   - docker-cli
   - docker-compose
-  - nodejs
-  - npm
+  - nodejs        # from NodeSource (setup-dev-tools.yml), NOT Debian's stock v20 package — includes npm
   - gh
   - ansible
   - mousepad

@@ -18,6 +18,41 @@
 
   tasks:
 
+  # Debian 13's own `nodejs` package is v20 — too old for
+  # @anthropic-ai/claude-code (requires >=22) and other modern npm
+  # tooling. NodeSource's repo (same signed-by pattern as Brave in
+  # setup-mate-desktop.yml) gets an actually-current Node instead.
+  - name: Ensure /etc/apt/keyrings exists (for NodeSource's signed-by repo)
+    ansible.builtin.file:
+      path: /etc/apt/keyrings
+      state: directory
+      mode: "0755"
+    tags: [dev, nodejs]
+
+  - name: Add NodeSource apt signing key
+    ansible.builtin.get_url:
+      url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+      dest: /etc/apt/keyrings/nodesource.gpg
+      mode: "0644"
+    tags: [dev, nodejs]
+
+  - name: Add NodeSource apt repository (Node {{ nodejs_major_version | default(22) }}.x)
+    ansible.builtin.apt_repository:
+      repo: "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_{{ nodejs_major_version | default(22) }}.x nodistro main"
+      filename: nodesource
+      state: present
+      update_cache: true
+    tags: [dev, nodejs]
+
+  # `state: present` on the general dev_packages install below won't swap
+  # an already-installed nodejs to NodeSource's version once apt already
+  # considers "present" satisfied by Debian's stock v20 — force it here.
+  - name: Ensure nodejs is upgraded to the NodeSource version
+    ansible.builtin.apt:
+      name: nodejs
+      state: latest
+    tags: [dev, nodejs]
+
   - name: Install dev tool packages
     ansible.builtin.apt:
       name: "{{ dev_packages }}"

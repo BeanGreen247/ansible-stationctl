@@ -96,6 +96,59 @@
     notify: Restart zramswap
     tags: [perf, zram]
 
+  # Disk-swap overflow tier, as a FILE not a partition. workstation_swapfile_gb
+  # defaults to 0 (disabled) — set it in group_vars/host_vars to enable. A
+  # file survives however the preseed partitioned the disk (see
+  # preseed/debian-preseed.cfg.j2's no_swap=true — the installer creates no
+  # swap partition at all now) and can be resized later without touching
+  # the partition table, unlike the swap partition this replaced on VMID 115.
+  # No dedicated "create a swapfile" module exists in ansible.builtin/
+  # community.general — fallocate + creates: guard is the standard pattern.
+  # To resize later, remove /swapfile first (this won't touch an existing one).
+  - name: Create swapfile (disk-swap overflow tier, below zram in priority)
+    ansible.builtin.command: fallocate -l {{ workstation_swapfile_gb }}G /swapfile
+    args:
+      creates: /swapfile
+    when: workstation_swapfile_gb | default(0) | int > 0
+    register: _stationctl_swapfile
+    tags: [perf, swapfile]
+
+  - name: Set swapfile permissions
+    ansible.builtin.file:
+      path: /swapfile
+      owner: root
+      group: root
+      mode: "0600"
+    when: workstation_swapfile_gb | default(0) | int > 0
+    tags: [perf, swapfile]
+
+  - name: Format swapfile (mkswap) if freshly created
+    ansible.builtin.command: mkswap /swapfile
+    when:
+      - workstation_swapfile_gb | default(0) | int > 0
+      - _stationctl_swapfile.changed
+    tags: [perf, swapfile]
+
+  - name: Ensure swapfile is in fstab
+    ansible.posix.mount:
+      path: none
+      src: /swapfile
+      fstype: swap
+      opts: sw
+      state: present
+    when: workstation_swapfile_gb | default(0) | int > 0
+    tags: [perf, swapfile]
+
+  - name: Ensure swapfile is active
+    ansible.builtin.command: swapon /swapfile
+    register: _swapon_result
+    failed_when:
+      - _swapon_result.rc != 0
+      - "'Device or resource busy' not in _swapon_result.stderr"
+    changed_when: _swapon_result.rc == 0
+    when: workstation_swapfile_gb | default(0) | int > 0
+    tags: [perf, swapfile]
+
   - name: Set vm.swappiness via sysctl
     ansible.posix.sysctl:
       name: vm.swappiness
@@ -187,6 +240,9 @@
       - "  Detected:    {{ ansible_processor_vcpus | default('?') }} vCPU / {{ ansible_memtotal_mb }} MB RAM"
       - "  zram:        {{ _stationctl_zram_percent }}% of RAM, {{ _stationctl_zram_algo }}"
       - "  swappiness:  {{ _stationctl_swappiness }}"
+      - >-
+        {{ "  swapfile:    %dGB at /swapfile" | format(workstation_swapfile_gb | int)
+           if (workstation_swapfile_gb | default(0) | int > 0) else "  swapfile:    disabled" }}
       - >-
         {{ "  drop_caches: every %dmin (page cache only)" | format(workstation_dropcaches_interval_min | int)
            if (workstation_dropcaches_interval_min | default(0) | int > 0) else "  drop_caches: disabled" }}
