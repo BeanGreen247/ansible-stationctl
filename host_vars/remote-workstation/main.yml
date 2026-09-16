@@ -4,6 +4,13 @@
 # only make sense on a VM (e.g. qemu-guest-agent) in setup-base-debian.yml.
 machine_role: "vm"
 
+# The preseed ISO used to install this box was a reused generic one (not
+# rebuilt per-VM), so it baked in a fallback hostname ("debian-vm") instead
+# of the vms.yml "name:" field ansible-proxmox actually created it as
+# (vm-debian-workstation-01, VMID 115). Correct it here so the two repos'
+# naming stays in sync.
+workstation_hostname: "vm-debian-workstation-01"
+
 # This is a Guacamole-reachable remote-desktop endpoint that should stay
 # lean in idle RAM — swap aggressively into zram (cheap, RAM-speed) rather
 # than hold onto anonymous memory, and periodically reclaim clean page

@@ -29,6 +29,20 @@
 
   tasks:
 
+  - name: Set system hostname (workstation_hostname override)
+    ansible.builtin.hostname:
+      name: "{{ workstation_hostname }}"
+    when: workstation_hostname | default('') | length > 0
+    tags: [base, hostname]
+
+  - name: Ensure /etc/hosts has the matching 127.0.1.1 entry
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: '^127\.0\.1\.1\s'
+      line: "127.0.1.1\t{{ workstation_hostname }}"
+    when: workstation_hostname | default('') | length > 0
+    tags: [base, hostname]
+
   - name: Update APT package index
     ansible.builtin.apt:
       update_cache: true
