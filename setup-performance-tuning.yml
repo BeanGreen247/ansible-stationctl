@@ -96,19 +96,148 @@
     notify: Restart zramswap
     tags: [perf, zram]
 
+  # Some hosts (e.g. VMID 115 / remote-workstation) still carry a leftover
+  # swap partition from an older preseed ISO run that predates this repo's
+  # no_swap=true preseed (see preseed/debian-preseed.cfg.j2). Left alone it
+  # just stacks a third swap tier on top of zram + /swapfile, which is where
+  # the "why is swap 17G not 5G" confusion came from. Detect anything in
+  # /proc/swaps that isn't zram or /swapfile and retire it: swapoff, drop
+  # from fstab, wipe the swap signature so a stray `swapon -a` can't revive
+  # it. This never touches the partition table, just the swap use of it.
+  #
+  # IMPORTANT: this can't distinguish "leftover preseed artifact" from "a
+  # normal, intentionally-provisioned swap partition" — both just look like
+  # "swap that isn't zram or /swapfile" to /proc/swaps. It enforces this
+  # repo's own policy (zram + optional /swapfile only, see host_vars
+  # comments) for the workstations it manages. Set
+  # workstation_remove_legacy_swap_partitions: false in host_vars for any
+  # host that's meant to keep a real swap partition.
+  - name: Detect legacy swap partitions not managed by this playbook
+    ansible.builtin.shell: |
+      set -o pipefail
+      awk 'NR>1 && $1 !~ /zram/ && $1 != "/swapfile" {print $1}' /proc/swaps
+    args:
+      executable: /bin/bash
+    register: _stationctl_legacy_swap
+    changed_when: false
+    check_mode: false
+    tags: [perf, swapfile]
+
+  - name: Disable legacy swap partition(s)
+    ansible.builtin.command: swapoff {{ item }}
+    loop: "{{ _stationctl_legacy_swap.stdout_lines }}"
+    when: workstation_remove_legacy_swap_partitions | default(true) | bool
+    tags: [perf, swapfile]
+
+  - name: Remove legacy swap partition(s) from fstab
+    ansible.posix.mount:
+      path: none
+      src: "{{ item }}"
+      fstype: swap
+      state: absent
+    loop: "{{ _stationctl_legacy_swap.stdout_lines }}"
+    when: workstation_remove_legacy_swap_partitions | default(true) | bool
+    tags: [perf, swapfile]
+
+  - name: Wipe swap signature from legacy partition(s)
+    ansible.builtin.command: wipefs -a {{ item }}
+    loop: "{{ _stationctl_legacy_swap.stdout_lines }}"
+    when: workstation_remove_legacy_swap_partitions | default(true) | bool
+    tags: [perf, swapfile]
+
+  # Once a legacy swap partition is retired above, it just sits there as
+  # dead space (that's what we did by hand on VMID 115: delete the DOS
+  # extended container + swap logical partition, grow the root partition
+  # into the freed sectors with sfdisk, partprobe, then online resize2fs).
+  # This task automates that so future hosts with the same preseed leftover
+  # don't need the by-hand treatment. It's deliberately conservative — it
+  # only acts when EVERY partition after root on the same disk is either
+  # unformatted (a DOS extended container) or swap-typed and unmounted; if
+  # anything else is back there (real data, an unknown fstype, something
+  # still mounted) it prints why and changes nothing. Re-running after it
+  # has already grown root is a safe no-op (no trailing partitions left).
+  # Set workstation_grow_root_fs: false in host_vars to opt a host out.
+  - name: Reclaim trailing swap-only partition space into the root filesystem
+    ansible.builtin.shell: |
+      set -e
+      python3 - <<'PY'
+      import os, re, subprocess, sys
+
+      def run(cmd, **kw):
+          return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+      root_dev = run(["findmnt", "-n", "-o", "SOURCE", "/"]).stdout.strip()
+      m = re.match(r"^(/dev/[a-z]+)([0-9]+)$", root_dev)
+      if not m:
+          print("SKIP: unsupported root device naming: %s" % root_dev)
+          sys.exit(0)
+      disk = m.group(1)
+
+      lsblk = run(["lsblk", "-ln", "-o", "NAME,TYPE", disk]).stdout.splitlines()
+      part_names = [l.split()[0] for l in lsblk if len(l.split()) == 2 and l.split()[1] == "part"]
+      root_name = os.path.basename(root_dev)
+      other = [n for n in part_names if n != root_name]
+
+      if not other:
+          print("SKIP: root partition already spans the disk, nothing to reclaim")
+          sys.exit(0)
+
+      active_swaps = set()
+      with open("/proc/swaps") as f:
+          next(f, None)
+          for line in f:
+              active_swaps.add(line.split()[0])
+
+      unsafe = []
+      for n in other:
+          devpath = "/dev/%s" % n
+          fstype = run(["blkid", "-o", "value", "-s", "TYPE", devpath]).stdout.strip()
+          mounted = run(["findmnt", "-n", devpath]).stdout.strip()
+          # still active in /proc/swaps means it was not actually retired yet
+          # (e.g. workstation_remove_legacy_swap_partitions: false) — leave it alone.
+          if mounted or devpath in active_swaps or (fstype and fstype != "swap"):
+              unsafe.append("%s (fstype=%s mounted=%s active_swap=%s)" % (
+                  n, fstype or "none", bool(mounted), devpath in active_swaps))
+
+      if unsafe:
+          print("SKIP: unexpected partition(s) after root, leaving disk alone: %s" % ", ".join(unsafe))
+          sys.exit(0)
+
+      dump = run(["sfdisk", "-d", disk], check=True).stdout
+      lines = dump.splitlines()
+      header = [l for l in lines if l and not l.startswith("/dev/")]
+      root_line = next(l for l in lines if l.startswith(root_dev + " "))
+      new_root_line = re.sub(r",\s*size=\s*\d+", "", root_line)
+      script = "\n".join(header) + "\n\n" + new_root_line + "\n"
+
+      subprocess.run(["sfdisk", "--no-reread", "--force", disk], input=script, text=True, check=True)
+      subprocess.run(["partprobe", disk], check=False)
+
+      fstype = run(["findmnt", "-n", "-o", "FSTYPE", "/"]).stdout.strip()
+      if fstype in ("ext2", "ext3", "ext4"):
+          subprocess.run(["resize2fs", root_dev], check=True)
+      elif fstype == "xfs":
+          subprocess.run(["xfs_growfs", "/"], check=True)
+      else:
+          print("WARN: grew partition table but don't know how to online-resize fstype %s" % fstype)
+
+      print("CHANGED: reclaimed %s into %s (%s)" % (", ".join(other), root_dev, fstype))
+      PY
+    args:
+      executable: /bin/bash
+    register: _stationctl_grow_root
+    changed_when: "'CHANGED' in _stationctl_grow_root.stdout"
+    when: >-
+      (workstation_grow_root_fs | default(true) | bool)
+      and (workstation_remove_legacy_swap_partitions | default(true) | bool)
+    tags: [perf, swapfile]
+
   # Disk-swap overflow tier, as a FILE not a partition. workstation_swapfile_gb
   # defaults to 0 (disabled) — set it in group_vars/host_vars to enable. A
   # file survives however the preseed partitioned the disk (see
   # preseed/debian-preseed.cfg.j2's no_swap=true — the installer creates no
   # swap partition at all now) and can be resized later without touching
   # the partition table, unlike the swap partition this replaced on VMID 115.
-  #
-  # NOTE: VMID 115 (remote-workstation) still has a leftover 4G /dev/sda5
-  # swap partition from the original preseed ISO run, active alongside zram
-  # and /swapfile (see /etc/fstab — "swap was on /dev/sda5 during
-  # installation"). It's a known artifact, not something this repo created
-  # or manages, and it sits at a lower swap priority than zram/swapfile —
-  # safe to ignore.
   # No dedicated "create a swapfile" module exists in ansible.builtin/
   # community.general — fallocate + creates: guard is the standard pattern.
   # To resize later, remove /swapfile first (this won't touch an existing one).
@@ -265,6 +394,10 @@
       - >-
         {{ "  swapfile:    %dGB at /swapfile" | format(workstation_swapfile_gb | int)
            if (workstation_swapfile_gb | default(0) | int > 0) else "  swapfile:    disabled" }}
+      - >-
+        {{ "  legacy swap: removed " + (_stationctl_legacy_swap.stdout_lines | join(', '))
+           if (_stationctl_legacy_swap.stdout_lines | default([]) | length > 0) else "  legacy swap: none found" }}
+      - "  root fs:     {{ _stationctl_grow_root.stdout_lines[-1] | default('not evaluated') }}"
       - >-
         {{ "  drop_caches: every %dmin (page cache only)" | format(workstation_dropcaches_interval_min | int)
            if (workstation_dropcaches_interval_min | default(0) | int > 0) else "  drop_caches: disabled" }}
