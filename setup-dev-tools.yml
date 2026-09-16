@@ -82,10 +82,17 @@
     when: sysadmin_cli_packages | default([]) | length > 0
     tags: [dev, packages, cli-tools]
 
+  # --ignore-installed: some of these (fastapi -> typing-extensions, etc.)
+  # need a newer version than what an apt package (python3-dev among others)
+  # already dropped into dist-packages. Those apt-owned copies have no pip
+  # RECORD file, so pip's normal upgrade path fails trying to uninstall them
+  # first ("no RECORD file was found" / "uninstall-no-record-file"). Ignoring
+  # the already-installed version makes pip install its own copy alongside
+  # it instead of trying to remove the dpkg-owned one.
   - name: Install pip tooling for the custom scripts in this workstation's home dir
     ansible.builtin.pip:
       name: "{{ workstation_pip_packages }}"
-      extra_args: --break-system-packages
+      extra_args: --break-system-packages --ignore-installed
     when: workstation_pip_packages | default([]) | length > 0
     tags: [dev, pip]
 
