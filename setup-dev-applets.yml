@@ -11,9 +11,17 @@
 #       for dotfile-sync status and Tailscale/ZeroTier connectivity
 #
 #   Qt6 dropped legacy XEmbed tray-icon support, so these need a
-#   StatusNotifierItem host — mate-indicator-applet, added to the panel
-#   layout by setup-mate-desktop.yml (see the "indicators" panel object).
-#   MATE's own "notification-area" applet is XEmbed-only and can't host them.
+#   StatusNotifierItem host. mate-indicator-applet (added to the panel
+#   layout by setup-mate-desktop.yml, see the "indicators" panel object)
+#   only DISPLAYS indicators — it doesn't itself own org.kde.
+#   StatusNotifierWatcher on the session bus. That's provided by
+#   ayatana-indicator-application, a separate bridge daemon that
+#   registers the watcher and translates SNI items into the Ayatana
+#   indicator format mate-indicator-applet actually shows. Without it,
+#   QSystemTrayIcon apps run fine but never appear anywhere — confirmed
+#   via `gdbus ... ListNames` showing no org.kde.StatusNotifierWatcher
+#   owner at all until this package's service is running. MATE's own
+#   "notification-area" applet is XEmbed-only and can't host these either.
 #
 # Target hosts
 #   ansible-playbook setup-dev-applets.yml --limit workstations
@@ -28,11 +36,12 @@
 
   tasks:
 
-  - name: Install PyQt6 and the MATE indicator applet (SNI tray host)
+  - name: Install PyQt6, the MATE indicator applet, and the ayatana SNI watcher
     ansible.builtin.apt:
       name:
         - python3-pyqt6
         - mate-indicator-applet
+        - ayatana-indicator-application
       state: present
     tags: [applets]
 
@@ -93,14 +102,33 @@
       daemon_reload: true
     tags: [applets, apt-key-refresh]
 
-  # ── dotfile-sync (per end-user) ─────────────────────────────────────────────
-
   - name: Look up end-user's uid (needed for the --user systemd bus)
     ansible.builtin.command: id -u {{ vm_enduser_name }}
     register: _enduser_uid
     changed_when: false
     when: vm_enduser_name | default('') | length > 0
-    tags: [applets, dotfile-sync]
+    tags: [applets]
+
+  # Enabled by the package (symlinked into ayatana-indicators.target.wants)
+  # but that target isn't reliably pulled in at session start on its own —
+  # confirmed on a fresh post-reboot session where it stayed inactive until
+  # started explicitly. Without this actually running, the tray apps launch
+  # fine and never crash, but never appear anywhere either — there's no
+  # StatusNotifierWatcher on the bus for them to register with.
+  - name: Enable and start ayatana-indicator-application.service (as end-user)
+    ansible.builtin.systemd:
+      name: ayatana-indicator-application.service
+      scope: user
+      state: started
+      enabled: true
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    environment:
+      XDG_RUNTIME_DIR: "/run/user/{{ _enduser_uid.stdout }}"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets]
+
+  # ── dotfile-sync (per end-user) ─────────────────────────────────────────────
 
   - name: Ensure end-user's ~/.local/bin exists
     ansible.builtin.file:
