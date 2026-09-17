@@ -23,6 +23,18 @@ workstation_zram_percent: "auto"
 workstation_zram_algo: "auto"
 workstation_swappiness: "auto"
 
+# ---------------------------------------------------------------------------
+# Disk layout (setup-performance-tuning.yml / setup-kernel-perf-tuning.yml)
+# workstation_drives (device name -> "ssd"/"hdd") CANNOT live here — device
+# naming is host-specific (sda vs vda vs nvme0n1) and depends on what the
+# hypervisor/controller actually exposes. It stays mandatory in each host's
+# host_vars/<host>/main.yml (setup-kernel-perf-tuning.yml asserts it's set).
+# Everything else about how a workstation's disk is treated is shared fleet
+# policy and lives here instead of being an implicit playbook default.
+# ---------------------------------------------------------------------------
+workstation_grow_root_fs: true
+workstation_remove_legacy_swap_partitions: true
+
 # CPU governor (setup-kernel-perf-tuning.yml) — AUTO-DETECTED from each
 # host's machine_role (host_vars) unless overridden here or per-host:
 #   vm         -> performance  (no battery/thermal cost to worry about)
@@ -104,6 +116,39 @@ nerd_fonts_names:
   - DejaVuSansMono
   - Iosevka
   - NerdFontsSymbolsOnly
+
+# ---------------------------------------------------------------------------
+# GPU / sound driver packages (setup-base-debian.yml), keyed by machine_role
+# (host_vars/<host>/main.yml) — a VM's framebuffer/audio are virtual, with
+# nothing to drive and nothing to route audio to, so "vm" stays empty. A
+# bare-metal workstation gets real packages. To onboard a new bare-metal
+# host with different hardware, add/adjust the list here — no per-host
+# playbook logic needed, machine_role: "bare-metal" is all that's required
+# in that host's host_vars.
+# ---------------------------------------------------------------------------
+workstation_gpu_packages:
+  vm: []
+  bare-metal:
+    # Intel iGPU (i915) — ThinkPad E490's UHD 620. firmware-misc-nonfree
+    # covers i915 GuC/HuC firmware; intel-media-va-driver-non-free +
+    # mesa-va-drivers give VAAPI hw video accel; libgl1-mesa-dri is the
+    # userspace OpenGL driver MATE's compositor/apps render through.
+    - firmware-misc-nonfree
+    - intel-media-va-driver-non-free
+    - mesa-va-drivers
+    - libgl1-mesa-dri
+    - vainfo
+
+workstation_sound_packages:
+  vm: []
+  bare-metal:
+    # Intel HDA (snd_hda_intel, not SOF, on the E490's Cannon Point-LP
+    # controller) — kernel driver is already built in, this is just the
+    # userspace stack MATE's volume applet/apps need.
+    - alsa-utils
+    - pulseaudio
+    - pulseaudio-utils
+    - pavucontrol
 
 # ---------------------------------------------------------------------------
 # MATE desktop (setup-mate-desktop.yml)

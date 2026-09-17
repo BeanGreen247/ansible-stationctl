@@ -167,7 +167,9 @@
           return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
       root_dev = run(["findmnt", "-n", "-o", "SOURCE", "/"]).stdout.strip()
-      m = re.match(r"^(/dev/[a-z]+)([0-9]+)$", root_dev)
+      # nvme naming (nvme0n1p2: disk=nvme0n1, partition separator "p") differs
+      # from sd*/vd* naming (sda1: disk=sda, no separator) — match both.
+      m = re.match(r"^(/dev/(?:nvme\d+n\d+|[a-z]+))p?([0-9]+)$", root_dev)
       if not m:
           print("SKIP: unsupported root device naming: %s" % root_dev)
           sys.exit(0)

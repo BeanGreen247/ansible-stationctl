@@ -3,11 +3,8 @@
 machine_role: "bare-metal"
 
 # Mandatory (see setup-kernel-perf-tuning.yml) — real disk is SSD, not HDD.
-# VERIFY the device name with `lsblk -d -o NAME,ROTA,TYPE` before the first
-# --tags kperf run on this host; "sda" is a placeholder if the laptop's
-# drive actually enumerates as e.g. nvme0n1.
 workstation_drives:
-  sda: "ssd"
+  nvme0n1: "ssd"
 
 # Bias toward disk swap over holding page cache in RAM, same policy as
 # remote-workstation: swap proactively into zram first (still RAM-speed),

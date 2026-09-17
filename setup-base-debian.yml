@@ -113,6 +113,38 @@
     when: ansible_virtualization_role | default('') == 'guest'
     tags: [base, services, qemu]
 
+  # intel-media-va-driver-non-free lives in Debian's "non-free" component,
+  # not "non-free-firmware" — the preseed install only enables the latter
+  # (see /etc/apt/sources.list). Only bare-metal hosts need this at all.
+  - name: Enable contrib/non-free apt components (bare-metal GPU driver packages need it)
+    ansible.builtin.replace:
+      path: /etc/apt/sources.list
+      regexp: '^(deb(?:-src)? \S+ trixie\S* main) non-free-firmware$'
+      replace: '\1 contrib non-free non-free-firmware'
+    when: machine_role == 'bare-metal'
+    register: _apt_components
+    tags: [base, gpu, apt]
+
+  - name: Update APT cache after enabling new components
+    ansible.builtin.apt:
+      update_cache: true
+    when: _apt_components is changed
+    tags: [base, gpu, apt]
+
+  - name: Install GPU driver packages for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_gpu_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_gpu_packages[machine_role] | default([]) | length) > 0
+    tags: [base, gpu]
+
+  - name: Install sound driver/userspace packages for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_sound_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_sound_packages[machine_role] | default([]) | length) > 0
+    tags: [base, sound]
+
   # Remote-desktop endpoints must never sleep/suspend/hibernate — there's no
   # physical way to wake a headless VM back up, and a suspended guest just
   # looks like a dead VNC/Guacamole connection. Mask the systemd targets
