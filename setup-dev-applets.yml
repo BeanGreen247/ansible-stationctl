@@ -315,6 +315,52 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [applets, infra-connections]
 
+  # VS Code (password-store=basic) and Brave (--password-store=basic) were
+  # already told to avoid gnome-keyring for their OWN secret storage, but
+  # VS Code's built-in GitHub Authentication provider (used for Settings
+  # Sync sign-in) doesn't reliably honor that flag — confirmed it kept
+  # prompting to create/unlock a keyring passphrase regardless. Root cause
+  # confirmed via `gnome-keyring-daemon --help`: the login keyring is
+  # created/unlocked with whatever password the PAM auth hook captured at
+  # login (libpam-gnome-keyring), or interactively if nothing did — and
+  # remote-workstation's VNC session has no PAM login event in its path at
+  # all (tigervncserver@.service starts it directly), so nothing ever
+  # establishes an unlock password there. Force it to a blank passphrase
+  # instead, every session start — an empty password always "matches", so
+  # it never prompts, on either session type. This is the same accepted
+  # trade-off as password-store=basic (no real secret-at-rest protection),
+  # just applied at the OS keyring layer so it covers every app uniformly
+  # instead of depending on each one's own override flag working.
+  - name: Deploy blank-passphrase keyring auto-unlock script
+    ansible.builtin.copy:
+      dest: /usr/local/bin/stationctl-keyring-unlock
+      content: |
+        #!/bin/sh
+        echo -n "" | /usr/bin/gnome-keyring-daemon --unlock
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [applets, keyring]
+
+  - name: Deploy keyring auto-unlock autostart entry
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/autostart/stationctl-keyring-unlock.desktop"
+      content: |
+        [Desktop Entry]
+        Type=Application
+        Name=Stationctl Keyring Unlock
+        Comment=Auto-unlock the login keyring with a blank passphrase (no prompts)
+        Exec=/usr/local/bin/stationctl-keyring-unlock
+        NoDisplay=true
+        X-GNOME-Autostart-Phase=Initialization
+        X-GNOME-AutoRestart=false
+        X-GNOME-Autostart-enabled=true
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, keyring]
+
   - name: Print dev-applets summary
     ansible.builtin.debug:
       msg:
