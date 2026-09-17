@@ -25,6 +25,35 @@
 
   tasks:
 
+  # Drive types — mandatory per host (host_vars/<host>/main.yml), no
+  # fallback default. This exists because "is this box on an SSD or an
+  # HDD" was previously just an assumption baked into comments (and one of
+  # those assumptions was wrong: local-workstation was thought to be HDD,
+  # it's actually SSD) — decisions like preload/fstrim below now read this
+  # map instead of a guess. Format: { device_name: "ssd"|"hdd", ... },
+  # e.g. { sda: "ssd" } or { sda: "hdd", sdb: "ssd" }. Check real devices
+  # with `lsblk -d -o NAME,ROTA,TYPE` (ROTA=0 is SSD/NVMe, ROTA=1 is HDD)
+  # before setting this. This is independent from the per-device
+  # rotational udev rule further down (that one reads live sysfs and needs
+  # no manual map) — this map only drives host-wide "does this box have
+  # any HDD/SSD at all" choices like preload and fstrim.
+  - name: Ensure workstation_drives is defined for this host (mandatory)
+    ansible.builtin.assert:
+      that:
+        - workstation_drives is defined
+        - workstation_drives | length > 0
+      fail_msg: >-
+        workstation_drives is required in host_vars/{{ inventory_hostname }}/main.yml
+        — map each real disk device to its type, e.g. { sda: "ssd" } or
+        { sda: "hdd", sdb: "ssd" }. Check with: lsblk -d -o NAME,ROTA,TYPE
+    tags: [kperf, always, drives]
+
+  - name: Determine drive mix for this host
+    ansible.builtin.set_fact:
+      _stationctl_has_hdd: "{{ 'hdd' in (workstation_drives.values() | list) }}"
+      _stationctl_has_ssd: "{{ 'ssd' in (workstation_drives.values() | list) }}"
+    tags: [kperf, always, drives]
+
   # ---------------------------------------------------------------------
   # CPU governor
   # ---------------------------------------------------------------------
@@ -38,20 +67,31 @@
     failed_when: false
     tags: [kperf, cpu]
 
+  # Explicit override wins; otherwise pick by machine_role (host_vars) —
+  # a VM has no battery/thermal cost to "performance" pinned 24/7, a real
+  # laptop on battery does. See group_vars/workstations.yml for the table.
+  - name: Resolve CPU governor (manual override or auto-detected from machine_role)
+    ansible.builtin.set_fact:
+      _stationctl_cpu_governor: >-
+        {{ workstation_cpu_governor
+           if (workstation_cpu_governor | default('auto') != 'auto')
+           else ('performance' if (machine_role | default('vm') == 'vm') else 'schedutil') }}
+    tags: [kperf, cpu]
+
   # QEMU/KVM guests often don't expose cpufreq at all (host controls real
   # frequency scaling) — this is a best-effort oneshot, never fails the play
   # when there's no cpufreq sysfs to write to.
-  - name: Force performance CPU governor via oneshot service
+  - name: Force resolved CPU governor via oneshot service
     ansible.builtin.copy:
       dest: /etc/systemd/system/stationctl-cpu-performance.service
       content: |
         [Unit]
-        Description=Force performance CPU governor (stationctl)
+        Description=Force {{ _stationctl_cpu_governor }} CPU governor (stationctl)
         ConditionPathExists=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 
         [Service]
         Type=oneshot
-        ExecStart=/bin/sh -c 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$f" 2>/dev/null || true; done'
+        ExecStart=/bin/sh -c 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo {{ _stationctl_cpu_governor }} > "$f" 2>/dev/null || true; done'
         RemainAfterExit=true
 
         [Install]
@@ -209,13 +249,22 @@
     changed_when: true
     tags: [kperf, sysctl]
 
-  # ---------------------------------------------------------------------
   # I/O scheduler — BFQ for rotational disks (desktop responsiveness under
   # background I/O), none/noop for non-rotational (host/hypervisor or the
   # SSD's own controller already schedules; a guest-side scheduler on top
   # just adds latency). zram/loop devices are excluded — no scheduler
   # concept applies to them.
-  # ---------------------------------------------------------------------
+  #
+  # Readahead: kernel default (128KB) is conservative for sequential reads
+  # on real rotational media — bumped to 1MB on rotational devices only,
+  # pairs naturally with BFQ's latency-friendly scheduling for background
+  # I/O while still helping large sequential reads. Left at kernel default
+  # on non-rotational — SSD/NVMe controllers don't benefit the same way,
+  # and a bigger readahead window just spends more page cache per read on
+  # a small-RAM box for no gain there. Set via udev (ATTR{queue/rotational}
+  # is live sysfs, same source of truth as the scheduler rule above), not a
+  # one-shot blockdev --setra command that would need to be re-run every
+  # boot.
   - name: Ensure the bfq IO scheduler module is loaded (built into Debian's stock kernel)
     community.general.modprobe:
       name: bfq
@@ -223,12 +272,12 @@
     failed_when: false
     tags: [kperf, io]
 
-  - name: Deploy udev rule for rotational vs non-rotational IO scheduler
+  - name: Deploy udev rule for rotational vs non-rotational IO scheduler and readahead
     ansible.builtin.copy:
       dest: /etc/udev/rules.d/60-stationctl-ioscheduler.rules
       content: |
         # Managed by ansible-stationctl (setup-kernel-perf-tuning.yml) — do not edit by hand.
-        ACTION=="add|change", KERNEL=="sd[a-z]|vd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+        ACTION=="add|change", KERNEL=="sd[a-z]|vd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq", ATTR{queue/read_ahead_kb}="1024"
         ACTION=="add|change", KERNEL=="sd[a-z]|vd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="none"
         ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]", ATTR{queue/scheduler}="none"
       owner: root
@@ -307,45 +356,93 @@
     notify: Restart journald
     tags: [kperf, journald]
 
-  # ---------------------------------------------------------------------
   # Small daemons that pay for themselves: irqbalance spreads hardware IRQs
-  # across vCPUs, preload prefetches frequently-launched binaries. Both are
-  # cheap and safe on a 2 vCPU / small-RAM box.
-  # ---------------------------------------------------------------------
-  - name: Install and enable irqbalance + preload
+  # across vCPUs. Cheap and safe on a 2 vCPU / small-RAM box regardless of
+  # drive type, so it's unconditional.
+  #
+  # preload's value proposition is readahead prediction to hide rotational-
+  # disk seek latency — a real win on an HDD, close to zero (or a net
+  # negative: it's still a persistent daemon writing its stats DB
+  # periodically) on SSD/NVMe. Gate it on workstation_drives (host_vars)
+  # instead of assuming — a previous version of this comment assumed
+  # local-workstation was HDD; it's actually SSD, which is exactly the kind
+  # of guess this variable exists to remove.
+  - name: Install irqbalance (all hosts)
     ansible.builtin.apt:
-      name:
-        - irqbalance
-        - preload
+      name: irqbalance
       state: present
       update_cache: true
       cache_valid_time: 3600
     tags: [kperf, services]
 
-  - name: Ensure irqbalance and preload are enabled and running
+  - name: Ensure irqbalance is enabled and running
     ansible.builtin.systemd:
-      name: "{{ item }}"
+      name: irqbalance.service
       state: started
       enabled: true
-    loop:
-      - irqbalance.service
-      - preload.service
     tags: [kperf, services]
 
-  # ---------------------------------------------------------------------
+  - name: Install preload (only on hosts with an HDD)
+    ansible.builtin.apt:
+      name: preload
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    when: _stationctl_has_hdd
+    tags: [kperf, services]
+
+  - name: Ensure preload is enabled and running (only on hosts with an HDD)
+    ansible.builtin.systemd:
+      name: preload.service
+      state: started
+      enabled: true
+    when: _stationctl_has_hdd
+    tags: [kperf, services]
+
+  - name: Ensure preload is disabled on all-SSD/NVMe hosts
+    ansible.builtin.systemd:
+      name: preload.service
+      state: stopped
+      enabled: false
+    when: not _stationctl_has_hdd
+    failed_when: false
+    tags: [kperf, services]
+
   # earlyoom: kill the actual runaway process at low-memory before the box
   # grinds into unresponsive swap-thrash — a good complement to the
   # swap-heavy policy in setup-performance-tuning.yml (that policy makes
   # swap absorb pressure; earlyoom is the backstop for when even that isn't
   # enough). systemd-oomd does the same job and the two fighting each other
   # is worse than either alone, so disable systemd-oomd here.
-  # ---------------------------------------------------------------------
+  #
+  # Stock config has no opinion about which process is actually worth
+  # saving on THIS fleet — a backstop that picks its kill target blind is
+  # only half a backstop. --avoid protects the session itself (X/VNC
+  # server, display manager pieces, dbus, systemd/sshd) so a kill doesn't
+  # take down the very thing you'd SSH/VNC in to recover with; --prefer
+  # targets the actual usual-suspect runaway processes (browser, docker
+  # builds, node, java) first. No embedded quotes in the regexes below —
+  # ExecStart's $EARLYOOM_ARGS substitution does plain whitespace-splitting
+  # on the expanded value, so a quoted-with-spaces regex would pass the
+  # literal quote characters through as part of the pattern; keeping each
+  # regex as one unbroken token sidesteps that entirely.
   - name: Install earlyoom
     ansible.builtin.apt:
       name: earlyoom
       state: present
       update_cache: true
       cache_valid_time: 3600
+    tags: [kperf, oom]
+
+  - name: Configure earlyoom kill preferences
+    ansible.builtin.copy:
+      dest: /etc/default/earlyoom
+      content: |
+        EARLYOOM_ARGS="-r 3600 --avoid ^(Xorg|Xvnc|Xtigervnc|sshd|systemd|dbus-daemon|mate-session|mate-panel|mate-settings-daemon|lightdm)$ --prefer ^(chrome|chromium|brave|brave-browser|node|docker|containerd-shim|java)$"
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Restart earlyoom
     tags: [kperf, oom]
 
   - name: Enable and start earlyoom
@@ -368,7 +465,7 @@
       msg:
       - "========================================================"
       - "Kernel/scheduler/network tuning applied on: {{ inventory_hostname }}"
-      - "  CPU governor: performance (if cpufreq exposed by hypervisor)"
+      - "  CPU governor: {{ _stationctl_cpu_governor }} (if cpufreq exposed by hypervisor)"
       - "  GRUB cmdline: nowatchdog noirqdebug threadirqs preempt=full transparent_hugepage=madvise audit=0 loglevel=3{{ ' mitigations=off' if (workstation_kernel_mitigations_off | default(false) | bool) else '' }}"
       - "  >>> REBOOT REQUIRED for the GRUB cmdline change to take effect <<<"
       - "  THP: madvise (applied live)"
@@ -406,6 +503,11 @@
   - name: Reload systemd
     ansible.builtin.systemd:
       daemon_reload: true
+
+  - name: Restart earlyoom
+    ansible.builtin.systemd:
+      name: earlyoom.service
+      state: restarted
 
   - name: Restart journald
     ansible.builtin.systemd:

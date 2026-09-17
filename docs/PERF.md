@@ -1,0 +1,31 @@
+# PERF.md — performance/memory tuning ledger
+
+Records tuning ideas tried on this fleet: kept, rejected, or reverted, and why.
+Check here before proposing a tuning change — a "new" idea may already have
+been tried and rejected, and this file is where that gets remembered instead
+of only living in one person's head or a deleted comment.
+
+Add an entry any time a tuning change is made or considered and dropped.
+Format: idea, what was measured (or the reasoning if no formal measurement
+was taken — not everything here has been through a full profiling pass),
+verdict, why.
+
+| Idea | Host(s) | Verdict | Why |
+|---|---|---|---|
+| zswap stacked on top of zram | homelab Proxmox host (Starhaven), predates this repo | rejected | Real decompress/recompress churn observed in production — two compression layers fighting each other. Carried into this repo's `setup-performance-tuning.yml` as "single compression layer only" policy; never re-tried here. |
+| Background/forced reclaim daemon (KSM-style) on guest workstations | homelab Proxmox host reference doc | rejected | Fights KSM, evicts hot pages. Not even applicable here — KSM is a hypervisor-level concern, not a guest workstation one — but the "don't force reclaim" lesson carried over anyway. |
+| Periodic `drop_caches` timer | remote-workstation | rejected | At `vm.vfs_cache_pressure=500`, the kernel already reclaims clean page cache fast enough on its own; the forced timer was redundant. Left available as an opt-in var (`workstation_dropcaches_interval_min`) for a host where that's not true, just not enabled by default. |
+| `preload` on all workstations unconditionally | remote-workstation, local-workstation | corrected, not reverted | Originally justified by an assumption that both hosts were HDD-backed. local-workstation is actually SSD — preload's readahead-prediction benefit doesn't apply there, and it's still a persistent daemon writing a stats DB. Fixed by gating install/enable on the new mandatory `workstation_drives` host_vars map instead of a comment-level assumption. See `setup-kernel-perf-tuning.yml`. |
+| CPU governor forced to `performance` on every host | remote-workstation, local-workstation | corrected | Fine for a VM with no battery/thermal cost. Wrong default for local-workstation, a real laptop on battery — pinned max clock 24/7 costs battery life and runs hotter for a desktop workload that isn't CPU-bound. Now resolved per `machine_role` (`vm` → `performance`, `bare-metal` → `schedutil`), overridable via `workstation_cpu_governor`. |
+| Disable avahi-daemon | remote-workstation, local-workstation | kept, unmeasured | No reachable use case on a VNC-only remote desktop or single-purpose laptop workstation — mDNS/DNS-SD has nothing to discover here. Low-risk, not yet measured for actual idle-RAM/CPU delta; if it turns out to matter to something (e.g. local network printer/service discovery is wanted later), revisit. |
+| Cap Docker's `json-file` log driver (`max-size`/`max-file`) | both (dev tooling hosts) | kept | Not a perf win so much as a disk-usage bound — same class of fix as journald's `SystemMaxUse`. Prevents an unbounded log file from a chatty/long-running container on a small-disk workstation. No regression risk; this is a resource-cap correctness fix, not a speed optimization, so it didn't need a before/after benchmark. |
+| Scheduled window + `Remove-Unused-Dependencies` for unattended-upgrades | both | deferred indefinitely | Not a tuning question — user doesn't want automatic package updates on this fleet at all ("we will update when we need to and want to"). A separate playbook in `ansible-proxmox` owns update timing; that repo's `hosts.ini` just needs the actual host entries added. Not this repo's concern going forward — don't re-propose scheduling/auto-upgrade tuning here. |
+| Bump rotational-disk readahead to 1MB (`queue/read_ahead_kb`) via the existing IO-scheduler udev rule | remote-workstation (HDD, `workstation_drives`) | kept, unmeasured | Kernel default (128KB) is conservative for sequential reads on real rotational media; pairs with BFQ instead of fighting it. Not yet measured with a before/after sequential-read benchmark — flag for follow-up if it doesn't hold up. |
+| Disable `mate-power-manager` autostart on VMs, keep on real hardware | remote-workstation (disabled), local-workstation (kept) | kept | Same shape as the CPU-governor split: gated on `machine_role`, not removed unconditionally. Polls upower for battery/AC status the VM doesn't have; genuinely needed on the ThinkPad. |
+| Tune earlyoom `--avoid`/`--prefer` process patterns instead of stock config | both | kept, unmeasured | Stock earlyoom config has no opinion about which process is worth saving on this specific session shape (TigerVNC + MATE, not a generic desktop) — an untuned backstop can kill the very session you'd use to recover. `--avoid` protects Xorg/Xtigervnc/sshd/dbus/mate-session/lightdm; `--prefer` targets browser/docker/node/java as the likely actual runaway. Not measured against a real OOM event yet — that's inherently hard to test safely, so this is a reasoned default, not a benchmarked one. |
+| Set zram `STREAMS` to match vCPU count | — | rejected, not implemented | Modern kernels (≥4.7, well before Debian 13's kernel) removed the `max_comp_streams` tunable entirely — zram automatically uses one compression stream per online CPU with no config surface for it, and zram-tools' `/etc/default/zramswap` has no `STREAMS` key to begin with. Setting it would be a no-op line, not a real optimization. Don't re-propose this without first confirming the target kernel actually exposes the knob. |
+
+## Open items (not yet decided/measured)
+
+- `fstrim.timer` — considered, but both current hosts are HDD-backed per `workstation_drives` (host_vars), so periodic TRIM doesn't apply to this fleet today. Revisit if/when an SSD/NVMe host is added — gate it the same way preload is gated, off `_stationctl_has_ssd`.
+- Readahead bump (1MB on rotational) and the earlyoom avoid/prefer tuning above are both "reasoned, not measured" — no before/after benchmark exists yet for either. Worth a real measurement pass (sequential read throughput for readahead; can't safely benchmark earlyoom's kill selection without inducing real OOM pressure) before calling either one settled.

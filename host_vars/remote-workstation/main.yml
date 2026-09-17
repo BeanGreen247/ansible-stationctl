@@ -4,6 +4,14 @@
 # only make sense on a VM (e.g. qemu-guest-agent) in setup-base-debian.yml.
 machine_role: "vm"
 
+# Mandatory (see setup-kernel-perf-tuning.yml) — the VM's virtual disk is
+# backed by the homelab Proxmox host's HDD storage pool. VERIFY the device
+# name with `lsblk -d -o NAME,ROTA,TYPE` on the guest before the first
+# --tags kperf run ("sda" for SCSI/SATA-emulated disks, "vda" if the VM
+# uses the virtio-blk driver instead).
+workstation_drives:
+  sda: "hdd"
+
 # The preseed ISO used to install this box was a reused generic one (not
 # rebuilt per-VM), so it baked in a fallback hostname ("debian-vm") instead
 # of the vms.yml "name:" field ansible-proxmox actually created it as

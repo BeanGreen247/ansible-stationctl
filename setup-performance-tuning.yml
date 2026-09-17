@@ -389,6 +389,11 @@
     failed_when: false
     tags: [perf, cache]
 
+  # avahi-daemon (mDNS/DNS-SD) has no reachable use case on a VNC-only
+  # remote-desktop or a single-purpose laptop workstation — it's a
+  # background service polling the network for zero benefit here. Stopping
+  # the socket unit too, not just the service, since socket activation
+  # would otherwise respawn it on the first mDNS packet.
   - name: Disable unneeded services if present (best-effort, ignore missing)
     ansible.builtin.systemd:
       name: "{{ item }}"
@@ -398,6 +403,8 @@
       - bluetooth.service
       - cups.service
       - ModemManager.service
+      - avahi-daemon.service
+      - avahi-daemon.socket
     failed_when: false
     tags: [perf, services]
 

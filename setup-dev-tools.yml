@@ -104,6 +104,28 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [dev, docker]
 
+  # Default json-file log driver has no size cap — a long-running container
+  # (or one that's chatty on stdout/stderr) can grow its log file unbounded
+  # on a small-disk workstation, same class of problem journald was already
+  # capped for in setup-kernel-perf-tuning.yml. max-size/max-file bound it
+  # per container instead.
+  - name: Cap docker container log size (json-file driver)
+    ansible.builtin.copy:
+      dest: /etc/docker/daemon.json
+      content: |
+        {
+          "log-driver": "json-file",
+          "log-opts": {
+            "max-size": "10m",
+            "max-file": "3"
+          }
+        }
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Restart docker
+    tags: [dev, docker]
+
   - name: Ensure docker service is enabled and running
     ansible.builtin.service:
       name: docker
@@ -126,3 +148,9 @@
       - git_user_name | default('') | length > 0
       - git_user_email | default('') | length > 0
     tags: [dev, git]
+
+  handlers:
+  - name: Restart docker
+    ansible.builtin.systemd:
+      name: docker
+      state: restarted

@@ -23,6 +23,16 @@ workstation_zram_percent: "auto"
 workstation_zram_algo: "auto"
 workstation_swappiness: "auto"
 
+# CPU governor (setup-kernel-perf-tuning.yml) — AUTO-DETECTED from each
+# host's machine_role (host_vars) unless overridden here or per-host:
+#   vm         -> performance  (no battery/thermal cost to worry about)
+#   bare-metal -> schedutil    (laptop on battery — "performance" pinned
+#                               24/7 burns battery and runs hotter for a
+#                               desktop workload that isn't CPU-bound)
+# Set to an explicit governor name (performance/schedutil/powersave/...) in
+# this file or a host's host_vars/<host>/main.yml to bypass auto-detection.
+workstation_cpu_governor: "auto"
+
 # ---------------------------------------------------------------------------
 # Base tool set (setup-base-debian.yml)
 # ---------------------------------------------------------------------------

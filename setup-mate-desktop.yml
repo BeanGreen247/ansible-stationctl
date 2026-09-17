@@ -257,6 +257,37 @@
     notify: Update dconf databases
     tags: [mate, dconf, theme]
 
+  # mate-power-manager comes along with mate-desktop-environment-core and
+  # autostarts via XDG autostart (not a systemd unit), polling upower for
+  # battery/AC status. Pure overhead on a VM with no battery to report on;
+  # genuinely needed on local-workstation (a real laptop). Gated on
+  # machine_role, not removed unconditionally — same shape as the CPU
+  # governor split. Overriding the .desktop with Hidden=true is the
+  # standard way to suppress one autostart entry without uninstalling the
+  # package (something else might still want it, e.g. manually launched).
+  - name: Disable mate-power-manager autostart on VMs (no battery, pure overhead)
+    ansible.builtin.copy:
+      dest: /etc/xdg/autostart/mate-power-manager.desktop
+      content: |
+        [Desktop Entry]
+        Type=Application
+        Name=Power Manager
+        Exec=/usr/bin/mate-power-manager
+        Hidden=true
+        X-MATE-Autostart-enabled=false
+      owner: root
+      group: root
+      mode: "0644"
+    when: machine_role | default('vm') == 'vm'
+    tags: [mate, power]
+
+  - name: Ensure mate-power-manager autostart override is absent on non-VM hosts
+    ansible.builtin.file:
+      path: /etc/xdg/autostart/mate-power-manager.desktop
+      state: absent
+    when: machine_role | default('vm') != 'vm'
+    tags: [mate, power]
+
   - name: Ensure dconf locks directory exists
     ansible.builtin.file:
       path: /etc/dconf/db/local.d/locks
