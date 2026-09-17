@@ -2,6 +2,8 @@
 
 > Zero-manual-labor MATE workstation automation — one playbook, identical environment on a Proxmox VM and on bare-metal hardware alike.
 
+> **In a hurry?** See [QUICKSTART.md](QUICKSTART.md) for "I want to change X, what do I edit and run" — this file is the full reference.
+
 ---
 
 ## Table of Contents
