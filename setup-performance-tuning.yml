@@ -129,14 +129,32 @@
     when: workstation_remove_legacy_swap_partitions | default(true) | bool
     tags: [perf, swapfile]
 
-  - name: Remove legacy swap partition(s) from fstab
-    ansible.posix.mount:
-      path: none
-      src: "{{ item }}"
-      fstype: swap
-      state: absent
+  # Debian's installer writes fstab swap lines as "UUID=..." not the raw
+  # device path — ansible.posix.mount's state=absent matches on the src
+  # field verbatim, so passing the raw /dev/nvmeXnYpZ path here NEVER
+  # matched and silently left the stale line in fstab (found via
+  # `findmnt --verify` reporting "unreachable on boot required source"
+  # ahead of a reboot). Resolve the actual UUID first (must happen BEFORE
+  # wipefs below — once the signature is gone, blkid can't resolve it
+  # anymore) and match on either form.
+  - name: Resolve UUID for legacy swap partition(s), if any
+    ansible.builtin.command: blkid -s UUID -o value {{ item }}
     loop: "{{ _stationctl_legacy_swap.stdout_lines }}"
+    register: _stationctl_legacy_swap_uuids
+    changed_when: false
+    failed_when: false
     when: workstation_remove_legacy_swap_partitions | default(true) | bool
+    tags: [perf, swapfile]
+
+  - name: Remove legacy swap partition(s) from fstab (by UUID or raw device path)
+    ansible.builtin.lineinfile:
+      path: /etc/fstab
+      regexp: "^(UUID={{ item.stdout }}|{{ item.item }})\\s+\\S+\\s+swap\\s"
+      state: absent
+    loop: "{{ _stationctl_legacy_swap_uuids.results | default([]) }}"
+    when:
+      - workstation_remove_legacy_swap_partitions | default(true) | bool
+      - item.stdout | default('') | length > 0
     tags: [perf, swapfile]
 
   - name: Wipe swap signature from legacy partition(s)
