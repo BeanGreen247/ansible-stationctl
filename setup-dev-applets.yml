@@ -1,0 +1,304 @@
+# setup-dev-applets.yml
+#
+# Overview
+#   Ports three tools from the user's kubuntu-setup reference project
+#   (github.com/BeanGreen247/kubuntu-setup) onto every stationctl workstation:
+#     - apt-key-refresh: weekly system timer, validates/rotates third-party
+#       apt signing keys, desktop notification on change
+#     - dotfile-sync: pulls the end-user's dotfiles from GitHub on a
+#       schedule (systemd --user timer)
+#     - dotfile-sync-tray / infra-connections: PyQt6 system-tray indicators
+#       for dotfile-sync status and Tailscale/ZeroTier connectivity
+#
+#   Qt6 dropped legacy XEmbed tray-icon support, so these need a
+#   StatusNotifierItem host — mate-indicator-applet, added to the panel
+#   layout by setup-mate-desktop.yml (see the "indicators" panel object).
+#   MATE's own "notification-area" applet is XEmbed-only and can't host them.
+#
+# Target hosts
+#   ansible-playbook setup-dev-applets.yml --limit workstations
+#
+# Credit: apt-key-refresh.sh / dotfile-sync.py / dotfile-sync-tray.py /
+#         infra-connections.py originally by BeanGreen247 (kubuntu-setup)
+---
+- name: Deploy apt-key-refresh, dotfile-sync, and status-tray applets
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  - name: Install PyQt6 and the MATE indicator applet (SNI tray host)
+    ansible.builtin.apt:
+      name:
+        - python3-pyqt6
+        - mate-indicator-applet
+      state: present
+    tags: [applets]
+
+  # ── apt-key-refresh (system-wide, root) ────────────────────────────────────
+
+  - name: Deploy apt-key-refresh script
+    ansible.builtin.copy:
+      src: files/dev-applets/apt-key-refresh.sh
+      dest: /usr/local/sbin/apt-key-refresh
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [applets, apt-key-refresh]
+
+  - name: Deploy apt-key-refresh systemd service
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/apt-key-refresh.service
+      content: |
+        [Unit]
+        Description=Validate and refresh third-party apt signing keys
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/apt-key-refresh
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Reload systemd
+    tags: [applets, apt-key-refresh]
+
+  - name: Deploy apt-key-refresh systemd timer (weekly + 10min after boot)
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/apt-key-refresh.timer
+      content: |
+        [Unit]
+        Description=Weekly apt signing key refresh
+
+        [Timer]
+        OnBootSec=10min
+        OnUnitActiveSec=1w
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Reload systemd
+    tags: [applets, apt-key-refresh]
+
+  - name: Enable and start apt-key-refresh.timer
+    ansible.builtin.systemd:
+      name: apt-key-refresh.timer
+      state: started
+      enabled: true
+      daemon_reload: true
+    tags: [applets, apt-key-refresh]
+
+  # ── dotfile-sync (per end-user) ─────────────────────────────────────────────
+
+  - name: Look up end-user's uid (needed for the --user systemd bus)
+    ansible.builtin.command: id -u {{ vm_enduser_name }}
+    register: _enduser_uid
+    changed_when: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Ensure end-user's ~/.local/bin exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.local/bin"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Deploy dotfile-sync
+    ansible.builtin.copy:
+      src: files/dev-applets/dotfile-sync.py
+      dest: "/home/{{ vm_enduser_name }}/.local/bin/dotfile-sync"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Deploy dotfile-sync-tray
+    ansible.builtin.copy:
+      src: files/dev-applets/dotfile-sync-tray.py
+      dest: "/home/{{ vm_enduser_name }}/.local/bin/dotfile-sync-tray"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Deploy infra-connections
+    ansible.builtin.copy:
+      src: files/dev-applets/infra-connections.py
+      dest: "/home/{{ vm_enduser_name }}/.local/bin/infra-connections"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync, infra-connections]
+
+  - name: Ensure end-user's dotfile-sync config directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/dotfile-sync"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  # dotfile-sync.py writes this itself on first run if absent, but we manage
+  # it here so it stays in sync with dotfile_sync_files (group_vars) instead
+  # of drifting from whatever the script's own built-in default is.
+  - name: Deploy dotfile-sync config
+    ansible.builtin.template:
+      src: templates/dotfile-sync-config.ini.j2
+      dest: "/home/{{ vm_enduser_name }}/.config/dotfile-sync/config.ini"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0600"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Ensure end-user's systemd --user directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/systemd/user"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Deploy dotfile-sync systemd --user service
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/systemd/user/dotfile-sync.service"
+      content: |
+        [Unit]
+        Description=Dotfile sync — pull dotfiles from GitHub
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        ExecStart=/home/{{ vm_enduser_name }}/.local/bin/dotfile-sync
+        StandardOutput=journal
+        StandardError=journal
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Deploy dotfile-sync systemd --user timer
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/systemd/user/dotfile-sync.timer"
+      content: |
+        [Unit]
+        Description=Dotfile sync timer
+
+        [Timer]
+        OnBootSec=2min
+        OnUnitActiveSec={{ dotfile_sync_interval_hours | default(12) }}h
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  # A --user systemd manager only stays up while the user is logged in or
+  # lingering is enabled — without this, the timer above dies the moment a
+  # VNC/console session ends and never fires again.
+  - name: Enable lingering for the end-user (keeps systemd --user alive)
+    ansible.builtin.command: loginctl enable-linger {{ vm_enduser_name }}
+    changed_when: true
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Enable and start dotfile-sync.timer (as end-user)
+    ansible.builtin.systemd:
+      name: dotfile-sync.timer
+      scope: user
+      state: started
+      enabled: true
+      daemon_reload: true
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    environment:
+      XDG_RUNTIME_DIR: "/run/user/{{ _enduser_uid.stdout }}"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  # ── Tray autostart (dotfile-sync-tray + infra-connections) ─────────────────
+
+  - name: Ensure end-user's autostart directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/autostart"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync, infra-connections]
+
+  - name: Deploy dotfile-sync-tray autostart entry
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/autostart/dotfile-sync-tray.desktop"
+      content: |
+        [Desktop Entry]
+        Type=Application
+        Name=Dotfile Sync
+        Comment=System-tray indicator for dotfile-sync
+        Exec=/home/{{ vm_enduser_name }}/.local/bin/dotfile-sync-tray
+        Icon=vcs-normal
+        Terminal=false
+        X-GNOME-Autostart-enabled=true
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, dotfile-sync]
+
+  - name: Deploy infra-connections autostart entry
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/autostart/infra-connections.desktop"
+      content: |
+        [Desktop Entry]
+        Type=Application
+        Name=Infra Connections
+        Comment=System-tray indicator for Tailscale/ZeroTier status
+        Exec=/home/{{ vm_enduser_name }}/.local/bin/infra-connections
+        Icon=network-vpn
+        Terminal=false
+        X-GNOME-Autostart-enabled=true
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets, infra-connections]
+
+  - name: Print dev-applets summary
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "Dev applets deployed on: {{ inventory_hostname }}"
+      - "  apt-key-refresh: weekly system timer + 10min after boot"
+      - "  dotfile-sync:    {{ dotfile_sync_interval_hours | default(12) }}h timer for {{ vm_enduser_name | default('none configured') }}, lingering enabled"
+      - "  Tray apps:       autostart on next login (dotfile-sync-tray, infra-connections)"
+      - "========================================================"
+    tags: [applets, summary]
+
+  handlers:
+  - name: Reload systemd
+    ansible.builtin.systemd:
+      daemon_reload: true

@@ -160,7 +160,7 @@
       content: |
         [org/mate/panel/general]
         toplevel-id-list=['bottom']
-        object-id-list=['menu-bar', 'window-list', 'notification-area', 'ram-status', 'sysmonitor', 'clock']
+        object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor', 'clock']
 
         [org/mate/panel/toplevels/bottom]
         orientation='bottom'
@@ -186,6 +186,16 @@
         applet-iid='NotificationAreaAppletFactory::NotificationArea'
         toplevel-id='bottom'
         position=10
+        panel-right-stick=true
+
+        # StatusNotifierItem/AppIndicator host — Qt6 apps (dotfile-sync-tray,
+        # infra-connections) need this since Qt6 dropped legacy XEmbed tray
+        # support; the notification-area applet above only hosts XEmbed.
+        [org/mate/panel/objects/indicators]
+        object-type='applet'
+        applet-iid='IndicatorAppletCompleteFactory::IndicatorAppletComplete'
+        toplevel-id='bottom'
+        position=9
         panel-right-stick=true
 
         [org/mate/panel/objects/ram-status]

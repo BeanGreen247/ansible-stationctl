@@ -1,0 +1,13 @@
+[general]
+interval_hours = {{ dotfile_sync_interval_hours | default(12) }}
+backup_count = {{ dotfile_sync_backup_count | default(5) }}
+
+{% for f in dotfile_sync_files %}
+[file.{{ f.name }}]
+url  = {{ f.url }}
+dest = {{ f.dest }}
+{% if f.chmod is defined %}
+chmod = {{ f.chmod }}
+{% endif %}
+
+{% endfor %}

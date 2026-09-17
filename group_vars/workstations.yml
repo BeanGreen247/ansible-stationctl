@@ -318,3 +318,22 @@ remote_access_packages:
 vnc_display: "1"
 vnc_geometry: "1920x1080"
 vnc_depth: 16
+
+# ---------------------------------------------------------------------------
+# Dev applets (setup-dev-applets.yml) — ported from the user's kubuntu-setup
+# reference project (github.com/BeanGreen247/kubuntu-setup): apt-key-refresh,
+# dotfile-sync, and the dotfile-sync-tray/infra-connections status applets.
+# ---------------------------------------------------------------------------
+dotfile_sync_interval_hours: 12
+dotfile_sync_backup_count: 5
+
+dotfile_sync_files:
+  - name: bashrc
+    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/bashrc/bashrc
+    dest: "~/.bashrc"
+  - name: vimrc
+    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/vim/vimrc
+    dest: "~/.vimrc"
+  - name: claude-md
+    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/claude/CLAUDE.md
+    dest: "~/.claude/CLAUDE.md"

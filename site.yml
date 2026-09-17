@@ -34,3 +34,5 @@
   import_playbook: setup-performance-tuning.yml
 - name: Kernel/scheduler/network performance tuning
   import_playbook: setup-kernel-perf-tuning.yml
+- name: Dev applets (apt-key-refresh, dotfile-sync, status trays)
+  import_playbook: setup-dev-applets.yml
