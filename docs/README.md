@@ -10,13 +10,14 @@
 2. [Repository Layout](#repository-layout)
 3. [Requirements](#requirements)
 4. [First-Time Setup](#first-time-setup)
-5. [Playbook Reference](#playbook-reference)
-6. [Configuration Reference](#configuration-reference)
-7. [Inventory](#inventory)
-8. [Day-to-Day Operations](#day-to-day-operations)
-9. [Vault — Managing Secrets](#vault--managing-secrets)
-10. [Known Limitations](#known-limitations)
-11. [Pending Tasks](#pending-tasks)
+5. [Step-by-Step: Applying This Setup on a New VM or Bare-Metal Machine](#step-by-step-applying-this-setup-on-a-new-vm-or-bare-metal-machine)
+6. [Playbook Reference](#playbook-reference)
+7. [Configuration Reference](#configuration-reference)
+8. [Inventory](#inventory)
+9. [Day-to-Day Operations](#day-to-day-operations)
+10. [Vault — Managing Secrets](#vault--managing-secrets)
+11. [Known Limitations](#known-limitations)
+12. [Pending Tasks](#pending-tasks)
 
 ---
 
@@ -79,6 +80,39 @@ No `roles/` directory — flat, tagged playbooks, same convention as `ansible-pr
 5. Full bring-up: `ansible-playbook site.yml`
 6. One-time manual step (secret, not automated — see [Known Limitations](#known-limitations)): SSH in and run `vncpasswd` as the end-user to set the VNC password.
 7. One-time manual step: `tailscale up` on each machine to authenticate.
+
+## Step-by-Step: Applying This Setup on a New VM or Bare-Metal Machine
+
+Same procedure for `remote-workstation` (Proxmox VM) and `local-workstation` (bare-metal ThinkPad E490) — the differences are called out inline. This is the sequence that's actually been run and verified end-to-end on `remote-workstation`.
+
+1. **Install fresh minimal Debian 13 (trixie).**
+   - VM: via `ansible-proxmox`'s `auto-install-debian.yml` (preseed, `no_swap=true` — no swap partition is created, this repo's `setup-performance-tuning.yml` owns swap entirely as zram + `/swapfile`).
+   - Bare metal: manual/netinst Debian install. **Before running `--tags perf` the first time**, check the real disk layout (`lsblk -f`, `sfdisk -d /dev/sdX`) — the installer may have created a real swap partition. Decide whether to keep it (`workstation_remove_legacy_swap_partitions: false` in that host's `host_vars/*/main.yml`) or let this repo retire it — see [Pending Tasks](#pending-tasks) for the full bare-metal caution list. Take a disk backup/snapshot first; bare metal has no Proxmox snapshot safety net.
+2. **Add the host to `inventory/hosts.ini`** under `[remote-workstation]` or `[local-workstation]` with its real IP (or `ansible_connection=local` if running directly on that machine).
+3. **Set up secrets**: `cp group_vars/all/example_of_main.yml group_vars/all/main.yml`, fill in real values, never commit it.
+4. **Bootstrap the ansible user**: `ansible-playbook setup-ansibleuser.yml -u root --limit <hostname>`
+5. **Dry-run first** (especially on bare metal, since `setup-performance-tuning.yml` can grow the root filesystem into reclaimed swap-partition space):
+   ```bash
+   ansible-playbook site.yml --limit <hostname> --check --diff
+   ```
+6. **Full bring-up for real**: `ansible-playbook site.yml --limit <hostname>`. This chains every layer including `setup-kernel-perf-tuning.yml` (CPU governor, GRUB cmdline, sysctls, BBR, IO scheduler, earlyoom) at the end.
+7. **Verify what applied *without* a reboot** — swap/cache policy and most kernel tuning take effect immediately:
+   ```bash
+   free -h; cat /proc/swaps
+   sysctl vm.swappiness vm.vfs_cache_pressure vm.min_free_kbytes
+   cat /sys/kernel/mm/transparent_hugepage/enabled   # expect [madvise]
+   cat /sys/block/sdX/queue/scheduler                # expect [bfq] on rotational, [none] on SSD/NVMe
+   sysctl net.ipv4.tcp_congestion_control             # expect bbr
+   systemctl is-active earlyoom irqbalance preload    # expect active
+   systemctl is-active systemd-oomd                   # expect inactive (disabled in favor of earlyoom)
+   ```
+8. **Reboot** — required for the GRUB cmdline flags (`nowatchdog noirqdebug threadirqs preempt=full transparent_hugepage=madvise audit=0 loglevel=3`, plus `mitigations=off` if that opt-in is set) to actually take effect. Do this whenever's convenient; nothing above depends on it.
+9. **Verify the reboot picked up the cmdline flags**:
+   ```bash
+   cat /proc/cmdline
+   ```
+   If the flags are missing after a reboot, `grub.cfg` was never regenerated — re-run `ansible-playbook setup-kernel-perf-tuning.yml --limit <hostname> --tags kperf,grub` (idempotent; it now actively checks `grub.cfg` content, not just whether the drop-in source file changed) and reboot again.
+10. **One-time manual steps** (secrets/interactive auth, intentionally not automated): SSH in and run `vncpasswd` as the end-user, then `tailscale up` on the machine to authenticate.
 
 ## Playbook Reference
 
