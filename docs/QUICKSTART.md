@@ -87,6 +87,13 @@ playbook here is idempotent, so it's always safe to re-run.
    [Known Limitations](README.md#known-limitations)):
    - SSH in and run `vncpasswd` as the end-user to set the VNC password.
    - `tailscale up` on the machine to authenticate.
+   - The **first time** something needs the login keyring (VS Code Settings
+     Sync sign-in, Brave saving a password, etc.), expect one real
+     "Unlock/Create keyring" GUI dialog in that session — answer it with a
+     **blank password**. gnome-keyring has no working non-interactive path
+     for this (tested extensively — see `setup-dev-applets.yml`'s keyring
+     script comment); after this one click, the collection stays unlocked
+     for the rest of that boot/session for every app.
 8. If the host has real login credentials for a physical console (a laptop,
    not a headless VM), lightdm is already enabled/started automatically —
    log in physically, and the two tray applets (`dotfile-sync-tray`,
