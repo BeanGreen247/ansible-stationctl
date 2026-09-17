@@ -175,13 +175,22 @@
           sys.exit(0)
       disk = m.group(1)
 
+      root_num = int(m.group(2))
+
+      def part_num(name):
+          pm = re.search(r"p?([0-9]+)$", name)
+          return int(pm.group(1)) if pm else None
+
       lsblk = run(["lsblk", "-ln", "-o", "NAME,TYPE", disk]).stdout.splitlines()
       part_names = [l.split()[0] for l in lsblk if len(l.split()) == 2 and l.split()[1] == "part"]
       root_name = os.path.basename(root_dev)
-      other = [n for n in part_names if n != root_name]
+      # Only partitions AFTER root (higher partition number) are candidates —
+      # a leading partition (e.g. an EFI system partition) is never touched,
+      # regardless of what it is.
+      other = [n for n in part_names if n != root_name and (part_num(n) or 0) > root_num]
 
       if not other:
-          print("SKIP: root partition already spans the disk, nothing to reclaim")
+          print("SKIP: no trailing partitions after root, nothing to reclaim")
           sys.exit(0)
 
       active_swaps = set()
@@ -205,12 +214,26 @@
           print("SKIP: unexpected partition(s) after root, leaving disk alone: %s" % ", ".join(unsafe))
           sys.exit(0)
 
+      # Rewrite the table keeping every partition's line EXACTLY as sfdisk -d
+      # dumped it, except: the trailing partitions confirmed safe above are
+      # dropped, and root's own line has its explicit size= stripped so
+      # sfdisk extends it to fill the space freed by the drop. Any leading
+      # partition (e.g. an EFI system partition) is carried through
+      # unmodified — never reconstructed or reordered.
       dump = run(["sfdisk", "-d", disk], check=True).stdout
       lines = dump.splitlines()
-      header = [l for l in lines if l and not l.startswith("/dev/")]
-      root_line = next(l for l in lines if l.startswith(root_dev + " "))
-      new_root_line = re.sub(r",\s*size=\s*\d+", "", root_line)
-      script = "\n".join(header) + "\n\n" + new_root_line + "\n"
+      header = [l for l in lines if l and not l.startswith(disk)]
+      drop_paths = {"/dev/%s" % n for n in other}
+      part_lines = [l for l in lines if l.startswith(disk)]
+      kept_lines = []
+      for line in part_lines:
+          dev = line.split(":")[0].strip()
+          if dev in drop_paths:
+              continue
+          if dev == root_dev:
+              line = re.sub(r",\s*size=\s*\d+", "", line)
+          kept_lines.append(line)
+      script = "\n".join(header) + "\n\n" + "\n".join(kept_lines) + "\n"
 
       subprocess.run(["sfdisk", "--no-reread", "--force", disk], input=script, text=True, check=True)
       subprocess.run(["partprobe", disk], check=False)
