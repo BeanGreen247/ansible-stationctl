@@ -13,14 +13,23 @@ workstation_hostname: "vm-debian-workstation-01"
 
 # This is a Guacamole-reachable remote-desktop endpoint that should stay
 # lean in idle RAM — swap aggressively into zram (cheap, RAM-speed) rather
-# than hold onto anonymous memory, and periodically reclaim clean page
-# cache so `free -h` "used" stays low between sessions. Tuned hyperaggressive
-# on purpose: nothing here is a hot local dev cache worth protecting the way
-# it would be on the bare-metal local-workstation, so bias hard toward a low
-# idle footprint over avoiding reclaim churn.
+# than hold onto anonymous memory. Tuned hyperaggressive on purpose:
+# nothing here is a hot local dev cache worth protecting the way it would
+# be on the bare-metal local-workstation, so bias hard toward a low idle
+# footprint over avoiding reclaim churn.
+#
+# The periodic drop_caches timer (workstation_dropcaches_interval_min) was
+# tried here and removed — at vfs_cache_pressure=500 the kernel already
+# reclaims clean page cache on its own fast enough that the forced timer
+# was redundant. Leaving it unset (default 0 / disabled) instead of
+# reintroducing it.
 workstation_swappiness: 100
-workstation_dropcaches_interval_min: 5
 workstation_zram_percent: 150
+# Kernel default here was ~66MB (auto-sized from RAM); bumped to make kswapd
+# start background-reclaiming/swapping earlier instead of waiting for real
+# pressure — live check showed almost nothing in swap under normal load, so
+# this pushes swap usage up proactively for the desired low-idle-RAM profile.
+workstation_min_free_kbytes: 307200
 workstation_vfs_cache_pressure: 500
 
 # Disk-swap overflow tier, as a file (not a partition — the preseed install

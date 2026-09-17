@@ -1,3 +1,19 @@
 # host_vars/local-workstation/main.yml
 # Non-secret, host-specific overrides for the bare-metal ThinkPad E490.
 machine_role: "bare-metal"
+
+# Bias toward disk swap over holding page cache in RAM, same policy as
+# remote-workstation: swap proactively into zram first (still RAM-speed),
+# reclaim page cache aggressively via vfs_cache_pressure, and let the real
+# HDD swapfile absorb anything zram can't. No drop_caches timer here either
+# — see remote-workstation/main.yml, the kernel reclaims clean cache on its
+# own at this vfs_cache_pressure without a forced timer.
+workstation_swappiness: 100
+workstation_vfs_cache_pressure: 500
+# Same rationale as remote-workstation: bump kswapd's reclaim/swap trigger
+# point earlier instead of waiting for real pressure, for proactive swap
+# usage over idle page cache. Same absolute value as remote-workstation.
+workstation_min_free_kbytes: 307200
+
+# Disk-swap overflow tier on the laptop's real HDD, below zram in priority.
+workstation_swapfile_gb: 16

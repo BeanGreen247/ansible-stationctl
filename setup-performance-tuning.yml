@@ -308,6 +308,25 @@
       reload: true
     tags: [perf, sysctl]
 
+  # Kernel default is auto-sized from RAM (roughly sqrt-scaled), so unlike
+  # vfs_cache_pressure there's no one sane hardcoded fallback across hosts
+  # of different sizes — leave the kernel default alone unless a host opts
+  # in with an explicit workstation_min_free_kbytes. Raising it makes kswapd
+  # (background/async reclaim) start earlier and more often instead of
+  # waiting for real pressure or direct reclaim, so — combined with
+  # swappiness=100 — anon pages get swapped out more proactively. This is a
+  # kernel-native knob, not a forced reclaim daemon (see the drop_caches
+  # timer note above and the file header for why this repo avoids those).
+  - name: Set vm.min_free_kbytes via sysctl (opt-in per host)
+    ansible.posix.sysctl:
+      name: vm.min_free_kbytes
+      value: "{{ workstation_min_free_kbytes }}"
+      sysctl_file: /etc/sysctl.d/99-stationctl-min-free-kbytes.conf
+      state: present
+      reload: true
+    when: workstation_min_free_kbytes | default(0) | int > 0
+    tags: [perf, sysctl]
+
   # Opt-in per host via workstation_dropcaches_interval_min (host_vars) — not
   # a global default. High swappiness alone does NOT shrink page cache (it
   # does the opposite: it tells the kernel to prefer swapping anonymous
@@ -391,6 +410,9 @@
       - "  zram:        {{ _stationctl_zram_percent }}% of RAM, {{ _stationctl_zram_algo }}"
       - "  swappiness:  {{ _stationctl_swappiness }}"
       - "  vfs_cache_pressure: {{ workstation_vfs_cache_pressure | default(100) }}"
+      - >-
+        {{ "  min_free_kbytes: %dKB (kswapd reclaims/swaps earlier)" | format(workstation_min_free_kbytes | int)
+           if (workstation_min_free_kbytes | default(0) | int > 0) else "  min_free_kbytes: kernel default" }}
       - >-
         {{ "  swapfile:    %dGB at /swapfile" | format(workstation_swapfile_gb | int)
            if (workstation_swapfile_gb | default(0) | int > 0) else "  swapfile:    disabled" }}
