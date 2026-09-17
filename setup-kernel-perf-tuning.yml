@@ -87,6 +87,23 @@
     notify: Update GRUB
     tags: [kperf, grub]
 
+  # Belt-and-suspenders alongside the notify above: notify only fires on a
+  # *changed* copy, so a run that dies on a later task (before handlers
+  # flush) or a re-run where the drop-in already matched can silently skip
+  # regenerating grub.cfg even though the drop-in file itself is correct.
+  # Check the actual compiled grub.cfg, not just whether we wrote the source.
+  - name: Check whether grub.cfg already has the stationctl cmdline flags
+    ansible.builtin.command: grep -q 'nowatchdog noirqdebug threadirqs preempt=full' /boot/grub/grub.cfg
+    register: _stationctl_grub_cfg_check
+    changed_when: false
+    failed_when: false
+    tags: [kperf, grub]
+
+  - name: Regenerate grub.cfg if it's missing the stationctl cmdline flags
+    ansible.builtin.command: update-grub
+    when: _stationctl_grub_cfg_check.rc != 0
+    tags: [kperf, grub]
+
   # ---------------------------------------------------------------------
   # Transparent Huge Pages — applied live via sysfs too (tmpfiles.d), so it
   # takes effect immediately rather than waiting on the GRUB cmdline reboot.
@@ -101,6 +118,20 @@
       group: root
       mode: "0644"
     notify: Apply tmpfiles now
+    tags: [kperf, thp]
+
+  # Same belt-and-suspenders reasoning as the GRUB check above — verify the
+  # live sysfs value, don't just trust the notify fired.
+  - name: Check current live THP mode
+    ansible.builtin.command: grep -q '\[madvise\]' /sys/kernel/mm/transparent_hugepage/enabled
+    register: _stationctl_thp_check
+    changed_when: false
+    failed_when: false
+    tags: [kperf, thp]
+
+  - name: Apply THP mode now if sysfs doesn't already show madvise
+    ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/stationctl-thp.conf
+    when: _stationctl_thp_check.rc != 0
     tags: [kperf, thp]
 
   # ---------------------------------------------------------------------
