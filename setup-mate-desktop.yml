@@ -89,18 +89,28 @@
       mode: "0644"
     tags: [mate, lightdm]
 
-  # lightdm-gtk-greeter is still installed (harmless, small) and the
-  # 50-mate.conf above keeps its session config correct in case it's ever
-  # started manually, but sessions here are exclusively remote via TigerVNC
-  # (setup-remote-access.yml) — there's no local console user waiting at a
-  # greeter. Stopped/disabled so it doesn't burn RAM/GPU on the framebuffer
-  # or fight VNC for the display.
-  - name: Stop and disable lightdm service (VNC-only workstation, no local console login)
+  # A VM endpoint (remote-workstation) is reached exclusively via TigerVNC
+  # (setup-remote-access.yml) — there's no physical console user waiting at
+  # a greeter, so lightdm just burns RAM/GPU on the framebuffer or fights
+  # VNC for the display. Masked there. A bare-metal workstation DOES have a
+  # physical console someone logs into directly, so it needs a real display
+  # manager — lightdm-gtk-greeter is already installed for this.
+  - name: Stop and mask lightdm service (VM only — VNC-only, no local console login)
     ansible.builtin.systemd:
       name: lightdm
       state: stopped
       enabled: false
       masked: true
+    when: machine_role == 'vm'
+    tags: [mate, lightdm]
+
+  - name: Enable and start lightdm service (bare-metal only — real physical console login)
+    ansible.builtin.systemd:
+      name: lightdm
+      state: started
+      enabled: true
+      masked: false
+    when: machine_role == 'bare-metal'
     tags: [mate, lightdm]
 
   - name: Ensure system-wide dconf profile directory exists
