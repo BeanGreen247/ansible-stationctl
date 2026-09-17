@@ -227,6 +227,20 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [dev, vscode]
 
+  # Todo-Tree bundles its own ripgrep download, which can fail in sandboxed/
+  # offline install scenarios ("Failed to find vscode-ripgrep") — point it
+  # at the system package instead (already installed via
+  # sysadmin_cli_packages). Inserted right after the opening brace rather
+  # than templated as a whole file, since both hosts already have real
+  # pre-existing settings.json content this must not clobber.
+  - name: Point Todo-Tree at the system ripgrep binary
+    ansible.builtin.lineinfile:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
+      insertafter: '^\{$'
+      line: '    "todo-tree.ripgrep": "/usr/bin/rg",'
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
   - name: Install dev tool packages
     ansible.builtin.apt:
       name: "{{ dev_packages }}"
