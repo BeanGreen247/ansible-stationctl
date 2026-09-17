@@ -220,6 +220,127 @@ dev_packages:
   - libpam0g-dev
 
 # ---------------------------------------------------------------------------
+# Armbian Build Framework host deps (LukyStuff/Debian-build-server/build,
+# currently cloned on local-workstation) — installed fleet-wide like every
+# other list in this file, on the theory that any of these workstations
+# could end up building it, not just the one it happens to be cloned on
+# today.
+#
+# The framework's own compile.sh normally self-provisions these on first run
+# (prepare_host_noninteractive -> install_host_dependencies) — this list is a
+# deliberate, requested exception to have them ready ahead of time instead.
+# It's the exact "all-hosts, all-targets" default set from
+# lib/functions/host/prepare-host.sh's adaptative_prepare_host_dependencies()
+# (host_release/target_arch unset -> broadest default), with the "group::"
+# Docker-layer prefixes stripped (irrelevant outside their own Docker image
+# build) and the target/branch-conditional extras left out: python2 (only
+# for host_release bullseye/jammy), apt-cacher-ng (opt-in via MANAGE_ACNG),
+# the loongarch64 cross-toolchain (only when wanted_arch=="loong64"
+# specifically, not the "all" default), and llvm/clang (only if
+# KERNEL_COMPILER=clang). If a target build ever picks clang or a loong64
+# target, compile.sh will still self-install those specific extras on its
+# own.
+# ---------------------------------------------------------------------------
+armbian_build_framework_packages:
+  # native compiler toolchain & build essentials
+  - libc6-dev
+  - make
+  - dpkg-dev
+  - gcc
+  - ccache
+  - bison
+  - flex
+  - pkg-config
+  - libbison-dev
+  - libmpc-dev
+  - libfl-dev
+  # dev libraries & build helper tools
+  - device-tree-compiler
+  - libelf-dev
+  - libfdt-dev
+  - libncurses-dev
+  - libssl-dev
+  - libusb-1.0-0-dev
+  - swig
+  - u-boot-tools
+  - uuid-dev
+  - uuid-runtime
+  - zlib1g-dev
+  - dwarves
+  - libgnutls28-dev
+  # imaging (plymouth spinner/image conversion)
+  - imagemagick
+  # filesystem & partition tooling
+  - dosfstools
+  - e2fsprogs
+  - parted
+  - gdisk
+  - fdisk
+  # core/misc utilities
+  - binfmt-support
+  - arch-test
+  - lz4
+  - unzip
+  - zip
+  - pigz
+  - xz-utils
+  - pbzip2
+  - lzop
+  - zstd
+  - bc
+  - bsdextrautils
+  - ca-certificates
+  - cpio
+  - dialog
+  - dirmngr
+  - gawk
+  - gettext
+  - gnupg
+  - gpg
+  - jq
+  - kmod
+  - libfile-fcntllock-perl
+  - linux-base
+  - locales
+  - lsof
+  - ncurses-base
+  - ncurses-term
+  - ntpsec-ntpdate
+  - patchutils
+  - pv
+  - rsync
+  - udev
+  - file
+  - tree
+  - expect
+  - colorized-logs
+  - aria2
+  - curl
+  - axel
+  - wget
+  - parallel
+  - rdfind
+  - binwalk
+  - bash
+  - git
+  - psmisc
+  # python (Armbian's own tooling + u-boot builds)
+  - python3
+  - libpython3-dev
+  - libffi-dev
+  - python3-yaml
+  # qemu binfmt + chrooted user emulation (Debian trixie: qemu-user-static)
+  - qemu-user-static
+  # cross-compiler toolchains — "all targets" default (amd64/arm64/armhf/riscv64)
+  - gcc-x86-64-linux-gnu
+  - libc6-amd64-cross
+  - gcc-aarch64-linux-gnu
+  - gcc-arm-linux-gnueabi
+  - gcc-arm-linux-gnueabihf
+  - gcc-riscv64-linux-gnu
+  - libc6-dev-riscv64-cross
+
+# ---------------------------------------------------------------------------
 # Sysadmin/dev CLI toolkit, curated from github.com/BeanGreen247/kubuntu-setup
 # (the user's own reference desktop provisioning script) — trimmed to what's
 # actually relevant on a headless-ish MATE VM: dropped KDE-specific packages,

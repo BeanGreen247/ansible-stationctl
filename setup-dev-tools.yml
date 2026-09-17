@@ -91,6 +91,15 @@
       cache_valid_time: 3600
     tags: [dev, packages]
 
+  # Installed fleet-wide, not just where the framework is cloned today — see
+  # the package list's own comment in group_vars/workstations.yml for why
+  # this is pre-seeded instead of left to compile.sh's own self-provisioning.
+  - name: Install Armbian Build Framework host dependencies
+    ansible.builtin.apt:
+      name: "{{ armbian_build_framework_packages }}"
+      state: present
+    tags: [dev, packages, armbian]
+
   - name: Install sysadmin/dev CLI toolkit (curated from kubuntu-setup)
     ansible.builtin.apt:
       name: "{{ sysadmin_cli_packages }}"
