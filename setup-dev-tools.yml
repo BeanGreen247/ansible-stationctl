@@ -53,6 +53,36 @@
       state: latest
     tags: [dev, nodejs]
 
+  # Debian's repos don't carry the .NET SDK — Microsoft's own apt repo does.
+  # Needed to build .NET projects (e.g. jellyfin-storage-manager, net9.0)
+  # locally. Using Microsoft's own packages-microsoft-prod.deb (their
+  # documented install method) rather than hand-building the repo entry —
+  # the actual signing key on this repo (a 2023 "General GPG Signer" key)
+  # differs from the well-known microsoft.asc release key, and this .deb
+  # is the canonical source for the correct one.
+  - name: Download packages-microsoft-prod.deb
+    ansible.builtin.get_url:
+      url: "https://packages.microsoft.com/config/debian/{{ ansible_distribution_major_version }}/packages-microsoft-prod.deb"
+      dest: /tmp/packages-microsoft-prod.deb
+      mode: "0644"
+    tags: [dev, dotnet]
+
+  - name: Install Microsoft apt repository + keyring (.NET SDK)
+    ansible.builtin.apt:
+      deb: /tmp/packages-microsoft-prod.deb
+    register: _ms_repo
+    tags: [dev, dotnet]
+
+  # update_cache on the `deb:` install above isn't honored (it only applies
+  # to name-based installs), and the dev_packages task below has its own
+  # cache_valid_time that can otherwise treat a stale cache as fresh right
+  # after this repo file lands — always force a real update here regardless
+  # of _ms_repo.changed so dotnet-sdk-9.0 is visible to apt afterward.
+  - name: Update APT cache after adding Microsoft's repo
+    ansible.builtin.apt:
+      update_cache: true
+    tags: [dev, dotnet]
+
   - name: Install dev tool packages
     ansible.builtin.apt:
       name: "{{ dev_packages }}"

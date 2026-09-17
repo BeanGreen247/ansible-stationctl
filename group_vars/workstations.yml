@@ -196,6 +196,28 @@ dev_packages:
   - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
   - idle          # provides idlelib, used by some homegrown editor scripts
   - keepassxc
+  - dotnet-sdk-9.0    # from Microsoft's apt repo (setup-dev-tools.yml) — for .NET projects (net9.0)
+  # C/C++ build essentials meson/cmake actually need to resolve dependencies —
+  # build-essential alone doesn't cover this; without pkg-config, meson/cmake
+  # can't find ANY system library via pkgconfig at all.
+  - pkg-config
+  - cmake
+  # Wayland compositor dev headers (e.g. for building a wlroots-based
+  # compositor project) — not needed for typical app dev, but cheap to have
+  # on every workstation rather than diagnosing per-project on demand.
+  - libwayland-dev
+  - wayland-protocols
+  - libwlroots-0.18-dev
+  - libinput-dev
+  - libxkbcommon-dev
+  - libpixman-1-dev
+  - libdrm-dev
+  - libegl1-mesa-dev
+  - libgles2-mesa-dev
+  - libgtk-4-dev
+  - libpipewire-0.3-dev
+  - libgtk4-layer-shell-dev
+  - libpam0g-dev
 
 # ---------------------------------------------------------------------------
 # Sysadmin/dev CLI toolkit, curated from github.com/BeanGreen247/kubuntu-setup
