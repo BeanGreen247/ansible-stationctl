@@ -164,10 +164,11 @@ mate_packages:
   - dbus-x11
   - arc-theme          # placeholder dark theme for the "submarine" look — swap freely
   - mate-applets       # for the panel's System Monitor (multiload: cpu/mem/net/swap) applet
+  - papirus-icon-theme # actively maintained upstream, pairs with Arc-Dark
 
 mate_gtk_theme: "Arc-Dark"
 mate_marco_theme: "Arc-Dark"
-mate_icon_theme: "Adwaita"
+mate_icon_theme: "Papirus-Dark"
 mate_compositing_enabled: false
 
 # System-wide monospace font — a Nerd Font *Mono* variant so terminal apps
