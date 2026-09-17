@@ -32,3 +32,5 @@
   import_playbook: setup-remote-access.yml
 - name: Performance tuning
   import_playbook: setup-performance-tuning.yml
+- name: Kernel/scheduler/network performance tuning
+  import_playbook: setup-kernel-perf-tuning.yml

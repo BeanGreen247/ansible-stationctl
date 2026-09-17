@@ -55,6 +55,7 @@ ansible-stationctl/
 ├── setup-dev-tools.yml            # git, build-essential, docker, python3, nodejs, gh
 ├── setup-remote-access.yml        # TigerVNC + Tailscale
 ├── setup-performance-tuning.yml   # zram, swappiness, disable unneeded services
+├── setup-kernel-perf-tuning.yml   # CPU governor, GRUB cmdline, sysctl/IO/network tuning, earlyoom
 ├── site.yml                       # runs everything above, in order
 └── docs/README.md                 # this file
 ```
@@ -89,6 +90,7 @@ No `roles/` directory — flat, tagged playbooks, same convention as `ansible-pr
 | `setup-dev-tools.yml` | git, build-essential, Docker, Python, Node.js, GitHub CLI | `dev` |
 | `setup-remote-access.yml` | TigerVNC (MATE session) + Tailscale | `remote-access` |
 | `setup-performance-tuning.yml` | zram, swappiness, disables unneeded services | `perf` |
+| `setup-kernel-perf-tuning.yml` | CPU governor, GRUB cmdline flags (reboot required), extra vm/kernel/net sysctls, BBR, IO scheduler, irqbalance/preload, earlyoom | `kperf` |
 | `site.yml` | Runs all of the above, in dependency order | any of the above |
 
 Run a single layer with `--tags`, a single machine with `--limit`:
@@ -107,6 +109,7 @@ Everything tunable lives in `group_vars/workstations.yml`:
 - `debian_base_packages`, `mate_packages`, `dev_packages`, `remote_access_packages` — the package lists that define "the environment"
 - `mate_gtk_theme` / `mate_marco_theme` / `mate_icon_theme` — currently `Arc-Dark` as a placeholder for the "submarine" look; swap freely
 - `vnc_display` / `vnc_geometry` / `vnc_depth` — VNC session settings
+- `workstation_kernel_mitigations_off` (host_vars, default unset/false) — appends `mitigations=off` to the GRUB cmdline in `setup-kernel-perf-tuning.yml`. Real perf gain on older CPUs, real security cost (disables Spectre/Meltdown/etc CPU-vulnerability mitigations) — opt in per host deliberately, not a repo-wide default.
 
 ## Inventory
 

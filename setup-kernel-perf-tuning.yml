@@ -1,0 +1,364 @@
+# setup-kernel-perf-tuning.yml
+#
+# Overview
+#   Deeper kernel/scheduler/network/IO tuning layer, on top of the
+#   swap/cache policy setup-performance-tuning.yml already owns (zram,
+#   swappiness, vfs_cache_pressure, min_free_kbytes — don't duplicate those
+#   here). Adapted from this user's own reference tuning tools
+#   (BeanGreen247/tuxthrottle, BeanGreen247/kubuntu-setup) with anything
+#   GPU/gaming/Wi-Fi-specific dropped — these are headless-ish MATE VM/
+#   laptop *workstations*, not gaming desktops.
+#
+#   Several tasks here (GRUB cmdline) only take effect on the next reboot —
+#   that's expected, apply now and reboot when convenient.
+#
+# Target hosts
+#   ansible-playbook setup-kernel-perf-tuning.yml --limit workstations
+#
+# Credit: tuning approach adapted from BeanGreen247/tuxthrottle and
+# BeanGreen247/kubuntu-setup.
+---
+- name: Deeper kernel/scheduler/network/IO performance tuning
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  # ---------------------------------------------------------------------
+  # CPU governor
+  # ---------------------------------------------------------------------
+  - name: Install cpufrequtils (CPU governor control)
+    ansible.builtin.apt:
+      name: linux-cpupower
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    register: _stationctl_cpupower_install
+    failed_when: false
+    tags: [kperf, cpu]
+
+  # QEMU/KVM guests often don't expose cpufreq at all (host controls real
+  # frequency scaling) — this is a best-effort oneshot, never fails the play
+  # when there's no cpufreq sysfs to write to.
+  - name: Force performance CPU governor via oneshot service
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/stationctl-cpu-performance.service
+      content: |
+        [Unit]
+        Description=Force performance CPU governor (stationctl)
+        ConditionPathExists=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$f" 2>/dev/null || true; done'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Reload systemd and enable cpu-performance service
+    tags: [kperf, cpu]
+
+  # ---------------------------------------------------------------------
+  # GRUB kernel cmdline — takes effect on next reboot only
+  # ---------------------------------------------------------------------
+  # mitigations=off is deliberately NOT included by default: it disables
+  # Spectre/Meltdown/etc CPU-vulnerability mitigations for a real perf gain
+  # on older CPUs, at a real security cost. Opt in per host with
+  # workstation_kernel_mitigations_off: true if that trade-off is wanted.
+  - name: Configure GRUB kernel cmdline performance flags (drop-in, requires reboot)
+    ansible.builtin.copy:
+      dest: /etc/default/grub.d/stationctl-perf.cfg
+      content: |
+        # Managed by ansible-stationctl (setup-kernel-perf-tuning.yml) — do not edit by hand.
+        # nowatchdog/noirqdebug: drop NMI/softlockup watchdog + IRQ debug overhead
+        # threadirqs: IRQ handlers as schedulable kernel threads (lower worst-case latency)
+        # preempt=full: full kernel preemption for lowest scheduling latency
+        # transparent_hugepage=madvise: only opt-in processes (JVM/DB/etc) get THP, no khugepaged background scan cost
+        # audit=0: disable kernel audit subsystem (no compliance requirement on these boxes)
+        # loglevel=3: quieter console, still keeps errors/warnings
+        GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} nowatchdog noirqdebug threadirqs preempt=full transparent_hugepage=madvise audit=0 loglevel=3{{ ' mitigations=off' if (workstation_kernel_mitigations_off | default(false) | bool) else '' }}"
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update GRUB
+    tags: [kperf, grub]
+
+  # ---------------------------------------------------------------------
+  # Transparent Huge Pages — applied live via sysfs too (tmpfiles.d), so it
+  # takes effect immediately rather than waiting on the GRUB cmdline reboot.
+  # ---------------------------------------------------------------------
+  - name: Set THP mode to madvise immediately (tmpfiles.d, survives reboot too)
+    ansible.builtin.copy:
+      dest: /etc/tmpfiles.d/stationctl-thp.conf
+      content: |
+        w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
+        w /sys/kernel/mm/transparent_hugepage/defrag - - - - madvise
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Apply tmpfiles now
+    tags: [kperf, thp]
+
+  # ---------------------------------------------------------------------
+  # vm.*, kernel.*, net.* sysctls not already owned by setup-performance-tuning.yml
+  # ---------------------------------------------------------------------
+  - name: Configure additional VM/scheduler/network sysctls
+    ansible.builtin.copy:
+      dest: /etc/sysctl.d/99-stationctl-kernel-perf.conf
+      content: |
+        # Managed by ansible-stationctl (setup-kernel-perf-tuning.yml) — do not edit by hand.
+        # vm.swappiness / vm.vfs_cache_pressure / vm.min_free_kbytes live in
+        # setup-performance-tuning.yml's own sysctl.d files, not here.
+
+        # --- Memory / writeback ---
+        vm.dirty_ratio = 15
+        vm.dirty_background_ratio = 5
+        vm.dirty_expire_centisecs = 1500
+        vm.watermark_scale_factor = 125
+        vm.watermark_boost_factor = 0
+        vm.page-cluster = 4
+        vm.compaction_proactiveness = 0
+        vm.zone_reclaim_mode = 0
+        vm.stat_interval = 10
+        vm.max_map_count = 2147483642
+
+        # --- Scheduler ---
+        kernel.sched_autogroup_enabled = 1
+        kernel.nmi_watchdog = 0
+        kernel.numa_balancing = 0
+        kernel.hung_task_timeout_secs = 300
+
+        # --- Filesystem / fd limits ---
+        fs.inotify.max_user_watches = 524288
+        fs.pipe-max-size = 4194304
+        fs.file-max = 2147483152
+
+        # --- Network: BBR + fq, sized for a 2 vCPU / small-RAM workstation ---
+        net.ipv4.tcp_congestion_control = bbr
+        net.core.default_qdisc = fq
+        net.core.rmem_max = 134217728
+        net.core.wmem_max = 134217728
+        net.ipv4.tcp_fastopen = 3
+        net.ipv4.tcp_notsent_lowat = 16384
+        net.ipv4.tcp_slow_start_after_idle = 0
+        net.ipv4.tcp_keepalive_time = 120
+        net.ipv4.tcp_mtu_probing = 1
+        net.ipv4.tcp_rfc1337 = 1
+        net.ipv4.tcp_max_tw_buckets = 2000000
+        net.ipv4.ip_local_port_range = 1024 65535
+        net.core.somaxconn = 8192
+        net.core.netdev_max_backlog = 16384
+        net.core.netdev_budget = 600
+        net.core.netdev_budget_usecs = 8000
+      owner: root
+      group: root
+      mode: "0644"
+    register: _stationctl_kperf_sysctl
+    tags: [kperf, sysctl]
+
+  - name: Ensure tcp_bbr and sch_fq kernel modules are loaded at boot
+    ansible.builtin.copy:
+      dest: /etc/modules-load.d/stationctl-bbr.conf
+      content: |
+        tcp_bbr
+        sch_fq
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Load bbr/fq modules now
+    tags: [kperf, sysctl]
+
+  - name: Apply the new sysctls now (no reboot needed)
+    ansible.builtin.command: sysctl --system
+    when: _stationctl_kperf_sysctl.changed
+    changed_when: true
+    tags: [kperf, sysctl]
+
+  # ---------------------------------------------------------------------
+  # I/O scheduler — BFQ for rotational disks (desktop responsiveness under
+  # background I/O), none/noop for non-rotational (host/hypervisor or the
+  # SSD's own controller already schedules; a guest-side scheduler on top
+  # just adds latency). zram/loop devices are excluded — no scheduler
+  # concept applies to them.
+  # ---------------------------------------------------------------------
+  - name: Ensure the bfq IO scheduler module is loaded (built into Debian's stock kernel)
+    community.general.modprobe:
+      name: bfq
+      state: present
+    failed_when: false
+    tags: [kperf, io]
+
+  - name: Deploy udev rule for rotational vs non-rotational IO scheduler
+    ansible.builtin.copy:
+      dest: /etc/udev/rules.d/60-stationctl-ioscheduler.rules
+      content: |
+        # Managed by ansible-stationctl (setup-kernel-perf-tuning.yml) — do not edit by hand.
+        ACTION=="add|change", KERNEL=="sd[a-z]|vd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+        ACTION=="add|change", KERNEL=="sd[a-z]|vd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="none"
+        ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]", ATTR{queue/scheduler}="none"
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Reload udev rules and retrigger
+    tags: [kperf, io]
+
+  # ---------------------------------------------------------------------
+  # Resource limits (nofile/nproc) — dev tooling (Docker, Node, browsers,
+  # editors) routinely wants more than the Debian default 1024 nofile.
+  # ---------------------------------------------------------------------
+  - name: Raise nofile/nproc limits for interactive + service processes
+    ansible.builtin.copy:
+      dest: /etc/security/limits.d/99-stationctl.conf
+      content: |
+        * soft nofile 524288
+        * hard nofile 1048576
+        * soft nproc 65536
+        * hard nproc 65536
+        * soft memlock unlimited
+        * hard memlock unlimited
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [kperf, limits]
+
+  - name: Raise systemd's own default nofile/tasks limits (services inherit these)
+    ansible.builtin.copy:
+      dest: /etc/systemd/system.conf.d/99-stationctl-limits.conf
+      content: |
+        [Manager]
+        DefaultLimitNOFILE=1048576
+        DefaultTimeoutStopSec=10s
+        DefaultTimeoutStartSec=30s
+        DefaultDeviceTimeoutSec=10s
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Reload systemd
+    tags: [kperf, limits]
+
+  # ---------------------------------------------------------------------
+  # journald — cap disk usage, keep boot/service logs but don't let them grow
+  # unbounded on a small-disk workstation.
+  # ---------------------------------------------------------------------
+  - name: Bound journald disk usage
+    ansible.builtin.copy:
+      dest: /etc/systemd/journald.conf.d/99-stationctl.conf
+      content: |
+        [Journal]
+        Compress=yes
+        SystemMaxUse=256M
+        RateLimitBurst=1000
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Restart journald
+    tags: [kperf, journald]
+
+  # ---------------------------------------------------------------------
+  # Small daemons that pay for themselves: irqbalance spreads hardware IRQs
+  # across vCPUs, preload prefetches frequently-launched binaries. Both are
+  # cheap and safe on a 2 vCPU / small-RAM box.
+  # ---------------------------------------------------------------------
+  - name: Install and enable irqbalance + preload
+    ansible.builtin.apt:
+      name:
+        - irqbalance
+        - preload
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [kperf, services]
+
+  - name: Ensure irqbalance and preload are enabled and running
+    ansible.builtin.systemd:
+      name: "{{ item }}"
+      state: started
+      enabled: true
+    loop:
+      - irqbalance.service
+      - preload.service
+    tags: [kperf, services]
+
+  # ---------------------------------------------------------------------
+  # earlyoom: kill the actual runaway process at low-memory before the box
+  # grinds into unresponsive swap-thrash — a good complement to the
+  # swap-heavy policy in setup-performance-tuning.yml (that policy makes
+  # swap absorb pressure; earlyoom is the backstop for when even that isn't
+  # enough). systemd-oomd does the same job and the two fighting each other
+  # is worse than either alone, so disable systemd-oomd here.
+  # ---------------------------------------------------------------------
+  - name: Install earlyoom
+    ansible.builtin.apt:
+      name: earlyoom
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [kperf, oom]
+
+  - name: Enable and start earlyoom
+    ansible.builtin.systemd:
+      name: earlyoom.service
+      state: started
+      enabled: true
+    tags: [kperf, oom]
+
+  - name: Disable systemd-oomd (avoid fighting earlyoom)
+    ansible.builtin.systemd:
+      name: systemd-oomd.service
+      state: stopped
+      enabled: false
+    failed_when: false
+    tags: [kperf, oom]
+
+  - name: Print kernel perf tuning summary
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "Kernel/scheduler/network tuning applied on: {{ inventory_hostname }}"
+      - "  CPU governor: performance (if cpufreq exposed by hypervisor)"
+      - "  GRUB cmdline: nowatchdog noirqdebug threadirqs preempt=full transparent_hugepage=madvise audit=0 loglevel=3{{ ' mitigations=off' if (workstation_kernel_mitigations_off | default(false) | bool) else '' }}"
+      - "  >>> REBOOT REQUIRED for the GRUB cmdline change to take effect <<<"
+      - "  THP: madvise (applied live)"
+      - "  TCP: bbr + fq"
+      - "  IO scheduler: bfq (rotational) / none (non-rotational), via udev"
+      - "  irqbalance/preload: enabled"
+      - "  earlyoom: enabled, systemd-oomd: disabled"
+      - "========================================================"
+    tags: [kperf, summary]
+
+  handlers:
+  - name: Reload systemd and enable cpu-performance service
+    ansible.builtin.systemd:
+      name: stationctl-cpu-performance.service
+      state: started
+      enabled: true
+      daemon_reload: true
+
+  - name: Update GRUB
+    ansible.builtin.command: update-grub
+
+  - name: Apply tmpfiles now
+    ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/stationctl-thp.conf
+
+  - name: Load bbr/fq modules now
+    ansible.builtin.command: "{{ item }}"
+    loop:
+      - modprobe tcp_bbr
+      - modprobe sch_fq
+    failed_when: false
+
+  - name: Reload udev rules and retrigger
+    ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=block
+
+  - name: Reload systemd
+    ansible.builtin.systemd:
+      daemon_reload: true
+
+  - name: Restart journald
+    ansible.builtin.systemd:
+      name: systemd-journald.service
+      state: restarted
