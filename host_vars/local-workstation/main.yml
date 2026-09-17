@@ -2,6 +2,13 @@
 # Non-secret, host-specific overrides for the bare-metal ThinkPad E490.
 machine_role: "bare-metal"
 
+# This laptop has one real, pre-existing account ("bean" — set up before
+# stationctl ever touched the box, already has sudo, already has its own
+# real login password). vm_enduser_name in group_vars/all/main.yml
+# ("kenny") is only meant for remote-workstation; overridden here so
+# nothing on this host creates or manages a separate "kenny" account.
+vm_enduser_name: "bean"
+
 # Mandatory (see setup-kernel-perf-tuning.yml) — real disk is SSD, not HDD.
 workstation_drives:
   nvme0n1: "ssd"

@@ -235,6 +235,12 @@
       name: "{{ workstation_timezone | default('Europe/Prague') }}"
     tags: [base, config]
 
+  # update_password: on_create is deliberate — this account may be a
+  # pre-existing one on the machine (e.g. local-workstation's "bean", set up
+  # before stationctl ever touched the box) with its own real login
+  # password. Without this, every re-run would stomp that password with
+  # vm_enduser_password_hash, which isn't guaranteed to match — or even be
+  # meant for — this specific machine's account.
   - name: Create end-user account
     ansible.builtin.user:
       name: "{{ vm_enduser_name }}"
@@ -243,6 +249,7 @@
       shell: "{{ vm_enduser_shell }}"
       create_home: true
       password: "{{ vm_enduser_password_hash | default('!') }}"
+      update_password: on_create
     when: vm_enduser_name | default('') | length > 0
     tags: [base, users]
 
