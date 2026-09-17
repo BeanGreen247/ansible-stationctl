@@ -187,9 +187,9 @@
 
         [org/mate/panel/objects/ram-status/prefs]
         command='/usr/local/bin/stationctl-ram-status.sh'
-        interval=3000
+        interval=4
         show-icon=false
-        width=140
+        width=22
 
         [org/mate/panel/objects/sysmonitor]
         object-type='applet'
