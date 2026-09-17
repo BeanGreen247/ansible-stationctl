@@ -225,6 +225,15 @@
       mode: "0644"
     tags: [kperf, limits]
 
+  - name: Ensure /etc/systemd/system.conf.d exists
+    ansible.builtin.file:
+      path: /etc/systemd/system.conf.d
+      state: directory
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [kperf, limits]
+
   - name: Raise systemd's own default nofile/tasks limits (services inherit these)
     ansible.builtin.copy:
       dest: /etc/systemd/system.conf.d/99-stationctl-limits.conf
@@ -244,6 +253,15 @@
   # journald — cap disk usage, keep boot/service logs but don't let them grow
   # unbounded on a small-disk workstation.
   # ---------------------------------------------------------------------
+  - name: Ensure /etc/systemd/journald.conf.d exists
+    ansible.builtin.file:
+      path: /etc/systemd/journald.conf.d
+      state: directory
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [kperf, journald]
+
   - name: Bound journald disk usage
     ansible.builtin.copy:
       dest: /etc/systemd/journald.conf.d/99-stationctl.conf
