@@ -161,6 +161,72 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [dev, vscode]
 
+  - name: Ensure end-user's VS Code User settings directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  # Seeded once (force: false — never overwrites, so it doesn't fight
+  # whatever Settings Sync later pulls down or the user edits by hand).
+  # Disables GitHub Copilot's suggestions/chat if that extension is ever
+  # installed (these keys are inert no-ops otherwise) plus the built-in
+  # Chat/inline-chat UI entry points that ship in core VS Code regardless
+  # of Copilot being installed, and stops VS Code from recommending
+  # Copilot in the first place.
+  - name: Disable Copilot/AI chat features in VS Code user settings
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
+      content: |
+        {
+            "github.copilot.enable": {
+                "*": false,
+                "plaintext": false,
+                "markdown": false,
+                "scminput": false
+            },
+            "github.copilot.editor.enableAutoCompletions": false,
+            "github.copilot.editor.enableCodeActions": false,
+            "chat.commandCenter.enabled": false,
+            "inlineChat.enabled": false,
+            "extensions.ignoreRecommendations": true
+        }
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  # The copy above (force: false) never overwrites a pre-existing
+  # settings.json — one host had a large, genuinely user-customized file
+  # already (predates this playbook) with these two keys explicitly set to
+  # true, contradicting the ask. Patch only these specific lines in place
+  # rather than risk clobbering real customization; backrefs means this is
+  # a no-op wherever the pattern isn't present (e.g. the freshly-seeded
+  # file above, which uses a different key shape entirely).
+  - name: Force-disable github.copilot.enable if a pre-existing settings.json has it on
+    ansible.builtin.lineinfile:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
+      regexp: '^(\s*"github\.copilot\.enable"\s*:\s*)true(,?)\s*$'
+      line: '\1false\2'
+      backrefs: true
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  - name: Force-disable chat.agent.enabled if a pre-existing settings.json has it on
+    ansible.builtin.lineinfile:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
+      regexp: '^(\s*"chat\.agent\.enabled"\s*:\s*)true(,?)\s*$'
+      line: '\1false\2'
+      backrefs: true
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
   - name: Install dev tool packages
     ansible.builtin.apt:
       name: "{{ dev_packages }}"
