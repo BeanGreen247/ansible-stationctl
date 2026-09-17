@@ -219,7 +219,11 @@ class CheckWorker(QThread):
             data       = json.loads(out)
             state      = data.get("BackendState", "unknown")
             self_node  = data.get("Self") or {}
-            ips        = self_node.get("TailscaleIPs", [])
+            # .get(key, []) only applies the default when the key is MISSING —
+            # tailscale prints "TailscaleIPs": null (not omitted) while a
+            # host is installed but not yet authenticated (no `tailscale up`
+            # run yet), so ips ends up None instead of [] without `or []`.
+            ips        = self_node.get("TailscaleIPs") or []
             hostname   = self_node.get("HostName", "")
             dns        = self_node.get("DNSName", "").rstrip(".")
             peers      = len(data.get("Peer") or {})
