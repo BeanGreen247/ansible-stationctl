@@ -70,6 +70,39 @@
       state: present
     tags: [mate, browser]
 
+  # Same fix as VS Code's password-store=basic (setup-dev-tools.yml) —
+  # Brave is Chromium-based and honors the same flag family, avoiding a
+  # dependency on gnome-keyring being unlockable at all. Without this,
+  # Brave (like VS Code before the fix) prompts to create/unlock a keyring
+  # passphrase the first time it needs to store a saved password/sync
+  # secret — same underlying cause: no PAM login event on the VNC-started
+  # session to auto-unlock via, and no guarantee an existing keyring's
+  # stored password matches the login password on the lightdm-started one
+  # either. ~/.config/brave-flags.conf is Chromium's own supported
+  # user-level flags file, read by the browser binary itself at startup
+  # (not just the wrapper script) — one flag per line.
+  - name: Ensure end-user's ~/.config directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, browser]
+
+  - name: Set Brave to use basic password-store (avoids gnome-keyring prompts)
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/brave-flags.conf"
+      content: |
+        --password-store=basic
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, browser]
+
   - name: Ensure lightdm.conf.d directory exists
     ansible.builtin.file:
       path: /etc/lightdm/lightdm.conf.d
