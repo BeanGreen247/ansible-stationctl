@@ -321,48 +321,45 @@
   # Sync sign-in) doesn't reliably honor that flag — confirmed it kept
   # prompting to create/unlock a keyring passphrase regardless.
   #
-  # IMPORTANT — this script is best-effort only, not a guaranteed fix.
-  # Extensive live testing (gnome-keyring 48.0-1) found NO working
-  # non-interactive way to create or first-unlock a login keyring: every
-  # CLI flag combination (--login/--unlock/--replace, fed a blank
-  # passphrase via stdin) either silently no-ops or reports success
-  # without actually unlocking anything, and a real client access
-  # (`secret-tool store`) against a locked collection just hangs waiting
-  # for a GUI prompt that has no headless answer. This appears to be a
-  # genuine limitation of this gnome-keyring version for any session
-  # without a real PAM login event feeding it a password (remote-
-  # workstation's VNC session has none — tigervncserver@.service starts it
-  # directly) — not something this script can paper over.
-  #
-  # Practical reality: the FIRST time a session needs the keyring, expect
-  # one real "Unlock/Create keyring" GUI dialog — answer it with a BLANK
-  # password. After that one manual click, the collection stays unlocked
-  # for the rest of that boot/session and every app sharing it (VS Code,
-  # Brave, etc.) just works without prompting again. This is the same
-  # "one-time manual step" category as vncpasswd/tailscale up elsewhere in
-  # this repo — see docs/QUICKSTART.md.
-  - name: Deploy blank-passphrase keyring auto-unlock script
+  # No CLI flag (--login/--unlock/--replace, fed a blank passphrase via
+  # stdin) reliably unlocks or creates the login keyring on gnome-keyring
+  # 48.0-1 — confirmed via extensive live testing. What DOES work: calling
+  # the real Secret Service D-Bus Unlock method, which activates
+  # gcr-prompter and shows an actual "Unlock keyring" dialog (confirmed
+  # live — answering it with a blank password unlocks the collection for
+  # the rest of that session). This script triggers that dialog
+  # proactively at session start instead of waiting for whichever app
+  # happens to touch the keyring first (which may fail silently/hang
+  # instead of ever showing a prompt, as VS Code's GitHub auth did).
+  - name: Deploy keyring unlock-dialog trigger script
     ansible.builtin.copy:
       dest: /usr/local/bin/stationctl-keyring-unlock
       content: |
         #!/bin/sh
-        echo -n "" | /usr/bin/gnome-keyring-daemon --unlock
+        # Give the session bus / secret service a moment to be ready.
+        sleep 3
+        gdbus call --session \
+          --dest org.freedesktop.secrets \
+          --object-path /org/freedesktop/secrets \
+          --method org.freedesktop.Secret.Service.Unlock \
+          "[objectpath '/org/freedesktop/secrets/collection/login']" \
+          >/dev/null 2>&1
       owner: root
       group: root
       mode: "0755"
     tags: [applets, keyring]
 
-  - name: Deploy keyring auto-unlock autostart entry
+  - name: Deploy keyring unlock-dialog autostart entry
     ansible.builtin.copy:
       dest: "/home/{{ vm_enduser_name }}/.config/autostart/stationctl-keyring-unlock.desktop"
       content: |
         [Desktop Entry]
         Type=Application
         Name=Stationctl Keyring Unlock
-        Comment=Auto-unlock the login keyring with a blank passphrase (no prompts)
+        Comment=Prompt to unlock the login keyring at session start
         Exec=/usr/local/bin/stationctl-keyring-unlock
         NoDisplay=true
-        X-GNOME-Autostart-Phase=Initialization
+        X-GNOME-Autostart-Phase=Applications
         X-GNOME-AutoRestart=false
         X-GNOME-Autostart-enabled=true
       owner: "{{ vm_enduser_name }}"
