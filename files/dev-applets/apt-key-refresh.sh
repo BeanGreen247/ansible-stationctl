@@ -57,6 +57,7 @@ declare -a KEY_TABLE=(
     "kubernetes|https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key|/etc/apt/keyrings/kubernetes-apt-keyring.gpg"  # bump version path when upgrading clusters
     "brave-browser|https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg|/etc/apt/keyrings/brave-browser-archive-keyring.gpg"
     "spotify|https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.asc|/etc/apt/trusted.gpg.d/spotify.gpg"
+    "microsoft-vscode|https://packages.microsoft.com/keys/microsoft.asc|/etc/apt/keyrings/microsoft.gpg"
 )
 
 # ── Handle --list (no root needed) ────────────────────────────────────────────

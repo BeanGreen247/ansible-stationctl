@@ -83,6 +83,33 @@
       update_cache: true
     tags: [dev, dotnet]
 
+  # VS Code's own repo is signed with Microsoft's classic release key
+  # (the well-known microsoft.asc, NOT the newer key the .NET repo above
+  # uses — verified: `gpg --verify` on the repo's InRelease reports key
+  # EB3E94ADBE1229CF, matching microsoft.asc, not the .NET repo's
+  # EE4D7792F748182B). Same signed-by pattern as NodeSource/Brave.
+  - name: Add Microsoft VS Code apt signing key
+    ansible.builtin.get_url:
+      url: https://packages.microsoft.com/keys/microsoft.asc
+      dest: /etc/apt/keyrings/microsoft.gpg
+      mode: "0644"
+      force: true
+    tags: [dev, vscode]
+
+  - name: Add Microsoft VS Code apt repository
+    ansible.builtin.apt_repository:
+      repo: "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main"
+      filename: vscode
+      state: present
+      update_cache: true
+    tags: [dev, vscode]
+
+  - name: Install VS Code
+    ansible.builtin.apt:
+      name: code
+      state: present
+    tags: [dev, vscode]
+
   - name: Install dev tool packages
     ansible.builtin.apt:
       name: "{{ dev_packages }}"
