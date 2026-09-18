@@ -188,14 +188,23 @@
     tags: [mate, dconf, panel]
 
   # Battery/AC status moved to a proper iOS-style tray icon
-  # (battery-status-tray, setup-dev-applets.yml) instead of this
-  # plain-text Command-applet approach — remove the leftover script from
-  # any host this ran on before that change.
+  # (battery-status-tray, setup-dev-applets.yml) and that in turn by the
+  # native battstat panel applet just below — remove the leftover script
+  # from any host either of those ran on before this.
   - name: Remove the old plain-text battery-status script (superseded)
     ansible.builtin.file:
       path: /usr/local/bin/stationctl-battery-status.sh
       state: absent
     tags: [mate, power, cleanup]
+
+  # battstat (below) reads real charge state via upower — bare-metal only,
+  # no battery on a VM.
+  - name: Ensure upower is installed (bare-metal only)
+    ansible.builtin.apt:
+      name: upower
+      state: present
+    when: machine_role == 'bare-metal'
+    tags: [mate, power, packages]
 
   - name: Configure single bottom panel layout (best-effort default)
     ansible.builtin.template:

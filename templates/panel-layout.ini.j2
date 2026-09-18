@@ -1,6 +1,6 @@
 [org/mate/panel/general]
 toplevel-id-list=['bottom']
-object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor', 'clock']
+object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', {% if machine_role == 'bare-metal' %}'battery', {% endif %}'ram-status', 'sysmonitor', 'clock']
 
 [org/mate/panel/toplevels/bottom]
 orientation='bottom'
@@ -38,11 +38,31 @@ toplevel-id='bottom'
 position=9
 panel-right-stick=true
 
+{% if machine_role == 'bare-metal' %}
+# Battery charge — MATE's own native panel applet (battstat, from
+# mate-applets), not a systray icon. Chosen after several tray-icon
+# attempts (PyQt6 QSystemTrayIcon-drawn icons) kept getting squeezed
+# into whatever tiny square the SNI/indicator host allocates for tray
+# icons, no matter how large the source pixmap was rendered — a native
+# panel applet draws straight onto the panel like sysmonitor below, so
+# it isn't subject to that ceiling and reads live state via its own
+# upower hooks instead of a custom poll loop.
+[org/mate/panel/objects/battery]
+object-type='applet'
+applet-iid='BattstatFactory::BattstatApplet'
+toplevel-id='bottom'
+position=6
+panel-right-stick=true
+
+[org/mate/panel/objects/battery/prefs]
+show-text=1
+{% endif %}
+
 [org/mate/panel/objects/ram-status]
 object-type='applet'
 applet-iid='CommandAppletFactory::CommandApplet'
 toplevel-id='bottom'
-position=6
+position=7
 panel-right-stick=true
 
 [org/mate/panel/objects/ram-status/prefs]
