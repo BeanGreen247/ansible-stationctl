@@ -124,6 +124,17 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [remote-access, vnc, systemd]
 
+  # A Tailscale-interface restriction was tried here 2026-09-18 and
+  # REVERTED the same day — live testing showed Xtigervnc actually bound to
+  # 127.0.0.1-only (not the intended Tailscale IP, not 0.0.0.0), making VNC
+  # completely unreachable from anywhere, Tailscale included. Root cause
+  # not fully diagnosed (possibly the Tailscale interface not being fully
+  # up at the exact moment Xtigervnc bound its socket, despite `tailscale
+  # ip -4` having already succeeded when ansible ran) — not worth
+  # re-attempting without a much more careful test plan; reachability over
+  # the existing VncAuth password protection matters more here than the
+  # marginal hardening gain. Back to listening on all interfaces, the
+  # known-good state.
   - name: Set system-wide policy for the VNC session (geometry/depth/session/security)
     ansible.builtin.copy:
       dest: /etc/tigervnc/vncserver-config-mandatory
@@ -139,6 +150,7 @@
       owner: root
       group: root
       mode: "0644"
+    notify: Restart VNC server
     tags: [remote-access, vnc, systemd]
 
   - name: Enable and start the packaged VNC server on configured display
