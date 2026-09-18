@@ -171,6 +171,36 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [applets, dotfile-sync, infra-connections]
 
+  # Bare-metal only — no battery on a VM. upower is what actually knows
+  # charge state + estimated time remaining.
+  - name: Ensure upower is installed (bare-metal only)
+    ansible.builtin.apt:
+      name: upower
+      state: present
+    when: machine_role == 'bare-metal'
+    tags: [applets, battery-status, packages]
+
+  - name: Deploy battery-status-tray (bare-metal only)
+    ansible.builtin.copy:
+      src: files/dev-applets/battery-status-tray.py
+      dest: "/home/{{ vm_enduser_name }}/.local/bin/battery-status-tray"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - machine_role == 'bare-metal'
+    tags: [applets, battery-status]
+
+  - name: Remove battery-status-tray on non-bare-metal hosts (no battery to show)
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.local/bin/battery-status-tray"
+      state: absent
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - machine_role != 'bare-metal'
+    tags: [applets, battery-status]
+
   - name: Ensure end-user's dotfile-sync config directory exists
     ansible.builtin.file:
       path: "/home/{{ vm_enduser_name }}/.config/dotfile-sync"
@@ -315,6 +345,35 @@
       mode: "0644"
     when: vm_enduser_name | default('') | length > 0
     tags: [applets, infra-connections]
+
+  - name: Deploy battery-status-tray autostart entry (bare-metal only)
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/autostart/battery-status-tray.desktop"
+      content: |
+        [Desktop Entry]
+        Type=Application
+        Name=Battery Status
+        Comment=iOS-style battery percentage tray icon
+        Exec=/home/{{ vm_enduser_name }}/.local/bin/battery-status-tray
+        Icon=battery
+        Terminal=false
+        X-GNOME-Autostart-enabled=true
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - machine_role == 'bare-metal'
+    tags: [applets, battery-status]
+
+  - name: Remove battery-status-tray autostart entry on non-bare-metal hosts
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/autostart/battery-status-tray.desktop"
+      state: absent
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - machine_role != 'bare-metal'
+    tags: [applets, battery-status]
 
   # VS Code (password-store=basic) and Brave (--password-store=basic) were
   # already told to avoid gnome-keyring for their OWN secret storage, but

@@ -1,6 +1,6 @@
 [org/mate/panel/general]
 toplevel-id-list=['bottom']
-object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', {% if machine_role == 'bare-metal' %}'battery-status', {% endif %}'ram-status', 'sysmonitor', 'clock']
+object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor', 'clock']
 
 [org/mate/panel/toplevels/bottom]
 orientation='bottom'
@@ -38,30 +38,11 @@ toplevel-id='bottom'
 position=9
 panel-right-stick=true
 
-{% if machine_role == 'bare-metal' %}
-# Battery/AC status — bare-metal only, no battery on a VM. Same Command-
-# applet pattern as ram-status below (a script's stdout as panel text) —
-# MATE's own battery tray icon doesn't give a persistent percentage +
-# time-remaining readout without hovering/clicking it.
-[org/mate/panel/objects/battery-status]
-object-type='applet'
-applet-iid='CommandAppletFactory::CommandApplet'
-toplevel-id='bottom'
-position=6
-panel-right-stick=true
-
-[org/mate/panel/objects/battery-status/prefs]
-command='/usr/local/bin/stationctl-battery-status.sh'
-interval=10
-show-icon=false
-width=34
-{% endif %}
-
 [org/mate/panel/objects/ram-status]
 object-type='applet'
 applet-iid='CommandAppletFactory::CommandApplet'
 toplevel-id='bottom'
-position=7
+position=6
 panel-right-stick=true
 
 [org/mate/panel/objects/ram-status/prefs]

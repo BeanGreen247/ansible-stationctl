@@ -12,6 +12,10 @@ collections/ansible_collections/*
 # Ansible internal cache/lock
 .ansible/
 
+# Python bytecode cache
+__pycache__/
+*.pyc
+
 # VS Code
 .vscode/
 
