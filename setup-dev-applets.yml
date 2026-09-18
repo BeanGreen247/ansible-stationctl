@@ -40,6 +40,7 @@
     ansible.builtin.apt:
       name:
         - python3-pyqt6
+        - python3-dbus
         - mate-indicator-applet
         - ayatana-indicator-application
       state: present
@@ -323,62 +324,65 @@
   #
   # No CLI flag (--login/--unlock/--replace, fed a blank passphrase via
   # stdin) reliably unlocks or creates the login keyring on gnome-keyring
-  # 48.0-1 — confirmed via extensive live testing. What DOES work: calling
-  # the real Secret Service D-Bus Unlock method, which activates
-  # gcr-prompter and shows an actual "Unlock keyring" dialog (confirmed
-  # live — answering it with a blank password unlocks the collection for
-  # the rest of that session). This script triggers that dialog
-  # proactively at session start instead of waiting for whichever app
-  # happens to touch the keyring first (which may fail silently/hang
-  # instead of ever showing a prompt, as VS Code's GitHub auth did).
-  # Found broken in practice 2026-09-18 on remote-workstation: a single
-  # attempt after a flat `sleep 3`, with output thrown to /dev/null, means
-  # (a) if the session bus / secrets service isn't ready in exactly 3s on a
-  # resource-constrained VM (plausible — this is a 2-vCPU/~4GB box with
-  # several other autostart apps competing for CPU at the same
-  # "Applications" phase), the call silently fails and never retries, and
-  # (b) there was zero record of that happening — VS Code's GitHub auth then
-  # had to trigger its own reactive unlock prompt instead, the exact failure
-  # mode this script exists to prevent. Retrying for up to 30s and actually
-  # logging the outcome fixes both: the race gets a real window to resolve
-  # itself, and a future failure is diagnosable instead of silent.
-  #
-  # An explicit, generous --timeout is mandatory here, not cosmetic: this
-  # Unlock call blocks on an actual gcr-prompter dialog the person has to
-  # respond to, which can legitimately take far longer than GDBus's default
-  # ~25s method-call timeout. Without it, a slow response would make gdbus
-  # itself time out, the retry loop would treat that as a failure, and it
-  # would fire Unlock again 3s later — stacking a second dialog on top of
-  # the one already open. Confirmed via GLib's own docs that --timeout=-1
-  # does NOT mean infinite here — it means "use the default (~25s)", the
-  # exact thing being fixed — so 300s (5 minutes, generous for a login
-  # prompt) is used instead. The 3s retry delay only ever applies to a
-  # fast-fail (service not registered yet), never to "the person hasn't
-  # finished typing yet".
+  # 48.0-1 — confirmed via extensive live testing. What DOES work is the
+  # real Secret Service D-Bus flow, but it's a TWO-CALL handshake:
+  # Service.Unlock() on the login collection returns a Prompt object path,
+  # and a SEPARATE call to Prompt() on that path is what actually activates
+  # gcr-prompter and renders the visible dialog. Found broken in practice
+  # 2026-09-18: an earlier version of this script only called Unlock() and
+  # stopped — that alone creates the Prompt object but never shows anything,
+  # so the collection just silently stayed locked with no visible dialog and
+  # no error. It's also not safe to do as two separate `gdbus call`
+  # invocations either — each one opens its own connection and disconnects
+  # immediately on exit, and the Prompt object is tied to the connection
+  # that created it, so by the time a second `gdbus call` tries to invoke
+  # Prompt() on it, gnome-keyring has already discarded it ("Object does
+  # not exist at path"). Confirmed live: only a single persistent
+  # connection performing both calls (python3-dbus, already installed)
+  # actually spawns gcr-prompter.
   - name: Deploy keyring unlock-dialog trigger script
     ansible.builtin.copy:
       dest: /usr/local/bin/stationctl-keyring-unlock
       content: |
-        #!/bin/sh
-        LOGFILE="$HOME/.cache/stationctl-keyring-unlock.log"
-        mkdir -p "$(dirname "$LOGFILE")"
+        #!/usr/bin/env python3
+        import os
+        import time
+        import dbus
 
-        i=0
-        until gdbus call --session --timeout=300 \
-          --dest org.freedesktop.secrets \
-          --object-path /org/freedesktop/secrets \
-          --method org.freedesktop.Secret.Service.Unlock \
-          "[objectpath '/org/freedesktop/secrets/collection/login']" \
-          >>"$LOGFILE" 2>&1
-        do
-          i=$((i + 1))
-          if [ "$i" -ge 10 ]; then
-            echo "$(date -Is) giving up after $i attempts" >>"$LOGFILE"
-            exit 1
-          fi
-          sleep 3
-        done
-        echo "$(date -Is) unlock call succeeded (attempt $((i + 1)))" >>"$LOGFILE"
+        LOGFILE = os.path.expanduser("~/.cache/stationctl-keyring-unlock.log")
+        os.makedirs(os.path.dirname(LOGFILE), exist_ok=True)
+
+        def log(msg):
+            with open(LOGFILE, "a") as f:
+                f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n")
+
+        for attempt in range(1, 11):
+            try:
+                bus = dbus.SessionBus()
+                service = bus.get_object(
+                    "org.freedesktop.secrets", "/org/freedesktop/secrets"
+                )
+                _unlocked, prompt = service.Unlock(
+                    [dbus.ObjectPath("/org/freedesktop/secrets/collection/login")],
+                    dbus_interface="org.freedesktop.Secret.Service",
+                )
+                if str(prompt) != "/":
+                    # Same `bus`/connection as the Unlock() call above — a
+                    # fresh connection here would lose the Prompt object.
+                    prompt_obj = bus.get_object("org.freedesktop.secrets", prompt)
+                    prompt_obj.Prompt(
+                        "", dbus_interface="org.freedesktop.Secret.Prompt"
+                    )
+                    log(f"attempt {attempt}: prompt shown ({prompt})")
+                else:
+                    log(f"attempt {attempt}: already unlocked, no prompt needed")
+                break
+            except dbus.exceptions.DBusException as exc:
+                log(f"attempt {attempt} failed: {exc}")
+                if attempt == 10:
+                    log("giving up")
+                else:
+                    time.sleep(3)
       owner: root
       group: root
       mode: "0755"
