@@ -331,19 +331,41 @@
   # proactively at session start instead of waiting for whichever app
   # happens to touch the keyring first (which may fail silently/hang
   # instead of ever showing a prompt, as VS Code's GitHub auth did).
+  # Found broken in practice 2026-09-18 on remote-workstation: a single
+  # attempt after a flat `sleep 3`, with output thrown to /dev/null, means
+  # (a) if the session bus / secrets service isn't ready in exactly 3s on a
+  # resource-constrained VM (plausible — this is a 2-vCPU/~4GB box with
+  # several other autostart apps competing for CPU at the same
+  # "Applications" phase), the call silently fails and never retries, and
+  # (b) there was zero record of that happening — VS Code's GitHub auth then
+  # had to trigger its own reactive unlock prompt instead, the exact failure
+  # mode this script exists to prevent. Retrying for up to 30s and actually
+  # logging the outcome fixes both: the race gets a real window to resolve
+  # itself, and a future failure is diagnosable instead of silent.
   - name: Deploy keyring unlock-dialog trigger script
     ansible.builtin.copy:
       dest: /usr/local/bin/stationctl-keyring-unlock
       content: |
         #!/bin/sh
-        # Give the session bus / secret service a moment to be ready.
-        sleep 3
-        gdbus call --session \
+        LOGFILE="$HOME/.cache/stationctl-keyring-unlock.log"
+        mkdir -p "$(dirname "$LOGFILE")"
+
+        i=0
+        until gdbus call --session \
           --dest org.freedesktop.secrets \
           --object-path /org/freedesktop/secrets \
           --method org.freedesktop.Secret.Service.Unlock \
           "[objectpath '/org/freedesktop/secrets/collection/login']" \
-          >/dev/null 2>&1
+          >>"$LOGFILE" 2>&1
+        do
+          i=$((i + 1))
+          if [ "$i" -ge 10 ]; then
+            echo "$(date -Is) giving up after $i attempts" >>"$LOGFILE"
+            exit 1
+          fi
+          sleep 3
+        done
+        echo "$(date -Is) unlock call succeeded (attempt $((i + 1)))" >>"$LOGFILE"
       owner: root
       group: root
       mode: "0755"
