@@ -211,8 +211,12 @@
   # looks like a dead VNC/Guacamole connection. Mask the systemd targets
   # (belt) and tell logind to ignore idle/lid/power-key triggers
   # (suspenders) — mate-power-manager isn't installed so it can't
-  # independently trigger a suspend either.
-  - name: Mask systemd sleep/suspend/hibernate targets
+  # independently trigger a suspend either. VM only — this had no
+  # machine_role gate for a while and got applied to local-workstation
+  # (a real laptop) too, which is exactly why its mate-power-manager menu
+  # was missing Suspend/Hibernate: systemd reports those unavailable to
+  # logind/mate-power-manager once the targets are masked.
+  - name: Mask systemd sleep/suspend/hibernate targets (VM only)
     ansible.builtin.systemd:
       name: "{{ item }}"
       masked: true
@@ -221,9 +225,10 @@
       - suspend.target
       - hibernate.target
       - hybrid-sleep.target
+    when: machine_role == 'vm'
     tags: [base, power]
 
-  - name: Disable logind idle/lid/power-key suspend triggers
+  - name: Disable logind idle/lid/power-key suspend triggers (VM only)
     ansible.builtin.lineinfile:
       path: /etc/systemd/logind.conf
       regexp: "^#?{{ item.key }}="
@@ -234,6 +239,40 @@
       - { key: "HandleLidSwitch", value: "ignore" }
       - { key: "HandleLidSwitchExternalPower", value: "ignore" }
       - { key: "IdleAction", value: "ignore" }
+    when: machine_role == 'vm'
+    notify: Restart logind
+    tags: [base, power]
+
+  # Bare-metal counterpart — explicitly restores stock laptop power
+  # behavior (real lid/suspend/hibernate/power-key handling) in case this
+  # host was previously masked/disabled by an earlier, ungated version of
+  # the tasks above. Unmasking + removing the logind.conf overrides
+  # (rather than writing explicit "suspend"/"hibernate" values) restores
+  # systemd's own compiled-in defaults instead of us guessing at them.
+  - name: Ensure systemd sleep/suspend/hibernate targets are unmasked (bare-metal only)
+    ansible.builtin.systemd:
+      name: "{{ item }}"
+      masked: false
+    loop:
+      - sleep.target
+      - suspend.target
+      - hibernate.target
+      - hybrid-sleep.target
+    when: machine_role == 'bare-metal'
+    tags: [base, power]
+
+  - name: Ensure logind idle/lid/power-key overrides are absent (bare-metal only)
+    ansible.builtin.lineinfile:
+      path: /etc/systemd/logind.conf
+      regexp: "^#?{{ item }}="
+      state: absent
+    loop:
+      - HandleSuspendKey
+      - HandleHibernateKey
+      - HandleLidSwitch
+      - HandleLidSwitchExternalPower
+      - IdleAction
+    when: machine_role == 'bare-metal'
     notify: Restart logind
     tags: [base, power]
 

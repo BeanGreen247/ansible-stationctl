@@ -367,23 +367,50 @@
   # 2026-09-18 chasing a duplicate battery icon. On bare-metal, just leave
   # the package's own file alone — it already ships enabled by default.
 
-  # mate-power-manager shows its own battery status icon by default
-  # (icon-policy=present) whenever a battery exists — a second one
-  # alongside the battstat panel applet above. Keep mate-power-manager
-  # running (lid/suspend/brightness handling) but hide just its icon so
-  # battstat is the only battery indicator. Harmless to set on hosts
+  # Reverted: battstat (the "retro" native panel applet, tried as the
+  # single battery indicator instead of this) turned out flaky — its
+  # embedded window intermittently collapses to 1px wide on start,
+  # sometimes needing a manual panel-size nudge to recover, and didn't
+  # reliably survive a reboot. Back to mate-power-manager's own status
+  # icon as the one battery indicator instead. Harmless to set on hosts
   # where mate-power-manager never autostarts (VMs) — nothing reads it.
-  - name: Hide mate-power-manager's own status icon (battstat is the one indicator)
+  - name: Show mate-power-manager's own status icon (the one battery indicator)
     ansible.builtin.copy:
       dest: /etc/dconf/db/local.d/05-power-manager-icon
       content: |
         [org/mate/power-manager]
-        icon-policy='never'
+        icon-policy='present'
       owner: root
       group: root
       mode: "0644"
     notify: Update dconf databases
     tags: [mate, power, dconf]
+
+  # blueman's Bluetooth icon defaults to StatusNotifierItem (SNI), sharing
+  # the single indicators/mate-indicator-applet-complete host with the
+  # dev-applets tray apps (dotfile-sync-tray, infra-connections) — there's
+  # only ever one SNI host on the panel, so anything using SNI ends up
+  # bundled together with no way to reorder within it. blueman also ships
+  # a legacy XEmbed fallback (its StatusIcon plugin) that lands in
+  # notification-area instead, alongside sound/network — forcing that by
+  # disabling the SNI plugin genuinely separates it. Traced via blueman's
+  # own source (PluginManager.py): a plugin loads unless "!ClassName" is
+  # in plugin-list AND it's __unloadable__ (true by default) — confirmed
+  # live that "!StatusNotifierItem" (not a "-" prefix, that's a no-op)
+  # is what actually works, and verified via `xwininfo` that blueman's
+  # icon is then a real embedded XEmbed child of notification-area-applet.
+  - name: Force blueman onto its legacy XEmbed tray icon (bare-metal only)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/06-blueman-tray
+      content: |
+        [org/blueman/general]
+        plugin-list=['!StatusNotifierItem']
+      owner: root
+      group: root
+      mode: "0644"
+    when: machine_role == 'bare-metal'
+    notify: Update dconf databases
+    tags: [mate, bluetooth, dconf]
 
   - name: Ensure dconf locks directory exists
     ansible.builtin.file:
