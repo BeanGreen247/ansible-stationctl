@@ -69,20 +69,15 @@ def _read_battery() -> dict:
 
 
 def _battery_icon(percent: int, state: str) -> QIcon:
-    """Vertical battery icon: a rounded body with a small terminal nub on
-    top, charge level filling from the BOTTOM up — so on discharge the
-    empty (dark) area grows from the top down, same as a real battery
-    gauge, not the other way around. Percentage sits on a translucent
-    dark band across the middle so it stays legible over any fill color
-    or fill height.
-
-    (Earlier versions were a wide pill that got squeezed into a tiny
-    square by the tray host, and then a plain rounded-square badge that
-    read as a disk icon rather than a battery — this shape fixes both:
-    square-ish footprint avoids the squish, and the nub + vertical fill
-    make it unambiguously a battery.)
+    """Horizontal battery icon (on its side, terminal nub on the right):
+    charge fills from the LEFT — so on discharge the empty (dark) area
+    grows from the right, retreating toward the nub, same physical
+    orientation as the earlier vertical version just rotated 90°
+    (nub top->right, fill bottom->left). Percentage sits on a
+    translucent dark band across the middle so it stays legible over
+    any fill color/width.
     """
-    w, h = 48, 64
+    w, h = 72, 44
     pix = QPixmap(w, h)
     pix.fill(QColor(0, 0, 0, 0))
     p = QPainter(pix)
@@ -96,8 +91,8 @@ def _battery_icon(percent: int, state: str) -> QIcon:
         fill_color = NORMAL
 
     pct = max(0, min(100, percent))
-    nub = QRectF(w / 2 - 7, 2, 14, 6)
-    body = QRectF(6, 8, w - 12, h - 14)
+    body = QRectF(4, 5, 56, 32)
+    nub = QRectF(body.right(), body.center().y() - 8, 8, 16)
     body_path = QPainterPath()
     body_path.addRoundedRect(body, 8, 8)
 
@@ -112,10 +107,10 @@ def _battery_icon(percent: int, state: str) -> QIcon:
     p.setBrush(EMPTY_BG)
     p.drawPath(body_path)
 
-    # Charge fill, clipped to the body's rounded shape, rising from the
-    # bottom — the unfilled remainder stays at the top.
-    fill_h = body.height() * (pct / 100.0)
-    fill_rect = QRectF(body.x(), body.bottom() - fill_h, body.width(), fill_h)
+    # Charge fill, clipped to the body's rounded shape, growing from the
+    # left — the unfilled remainder stays on the right, toward the nub.
+    fill_w = body.width() * (pct / 100.0)
+    fill_rect = QRectF(body.x(), body.y(), fill_w, body.height())
     p.save()
     p.setClipPath(body_path)
     p.setPen(Qt.PenStyle.NoPen)
@@ -129,18 +124,18 @@ def _battery_icon(percent: int, state: str) -> QIcon:
     p.drawPath(body_path)
 
     # Percentage on a translucent dark band — legible regardless of what
-    # fill color/height sits behind it at that point.
-    band = QRectF(body.x(), body.center().y() - 11, body.width(), 22)
+    # fill color/width sits behind it at that point.
+    band = QRectF(body.x(), body.center().y() - 12, body.width(), 24)
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QColor(0, 0, 0, 140))
     band_path = QPainterPath()
     band_path.addRoundedRect(band, 5, 5)
     p.drawPath(band_path)
 
-    font = QFont("Sans", 15, QFont.Weight.Bold)
+    font = QFont("Sans", 19, QFont.Weight.Black)
     p.setFont(font)
     p.setPen(TEXT_ON_DARK)
-    p.drawText(band, Qt.AlignmentFlag.AlignCenter, str(pct))
+    p.drawText(body, Qt.AlignmentFlag.AlignCenter, str(pct))
 
     p.end()
     return QIcon(pix)
