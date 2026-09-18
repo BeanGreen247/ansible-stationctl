@@ -1,73 +1,94 @@
 # Remaining work
 
-Snapshot as of 2026-09-18. `local-workstation` (the ThinkPad, "PeakPulse")
-is currently powered off, so everything below is split so it's clear
-what's actionable right now vs. what's waiting on that machine.
+Snapshot as of 2026-09-18 (updated same day — local-workstation is back on
+and the full non-bootstrap playbook set has now run against it end to end).
 
 ---
 
-## remote-workstation (VM, kenny) — available now
+## local-workstation (laptop, bean) — done this session
 
-- **VS Code Settings Sync isn't actually turned on yet.** We fixed the
-  blocker (the keyring-unlock dialog now spawns automatically at session
-  start — answer it with a blank password once per boot), but nobody has
-  actually run "Settings Sync: Turn On" and signed in with GitHub yet.
-  That's a manual, interactive step in the VS Code UI itself.
-- **Todo-Tree ripgrep fix just landed, not yet confirmed working.** Open a
-  workspace with a `TODO`/`FIXME` comment in it and check the Todo-Tree
-  panel actually populates without the "Failed to find vscode-ripgrep"
-  error.
-- **The keyring-unlock dialog fix has only been confirmed via live D-Bus
-  testing, not a full reboot on this host specifically.** It survived a
-  VNC-session restart (mate-session restarted, keyring stayed unlocked),
-  but hasn't been checked across an actual `reboot`. Worth confirming next
-  time this VM reboots for any reason.
-- **`docs/README.md` is stale in places** — it still has language from the
-  09-15/09-16 planning sessions (e.g. describing `local-workstation` as
-  untouched) that predates everything done since. `docs/QUICKSTART.md` is
-  current; README could use a reconciliation pass whenever there's a lull.
+- **Full playbook run completed and verified** (`setup-base-debian.yml`
+  through `setup-security-hardening.yml`, skipping `setup-ansibleuser.yml`
+  since the host was already bootstrapped): `ok=178, changed=36, failed=0`.
+  Verified from a second SSH path per `docs/QUICKSTART.md`'s hard rule.
+- **Swap/disk policy item below is resolved** — confirmed via
+  `lsblk -f`/`/proc/swaps` on the real hardware: `nvme0n1` only has the EFI
+  partition (p1) and root (p2), no legacy swap partition ever existed here,
+  so the swap-reclaim task in `setup-performance-tuning.yml` correctly took
+  its "SKIP: no trailing partitions after root" no-op path. Root fs and
+  swapfile+zram are both intact and correctly configured. Nothing further
+  to do here.
+- **Bluetooth support added, bare-metal only** — new
+  `workstation_bluetooth_packages` (`group_vars/workstations.yml`, keyed by
+  `machine_role` same as GPU/sound) installs `bluez`, `bluez-firmware`,
+  `pulseaudio-module-bluetooth`, `blueman` and enables `bluetooth.service`
+  on real hardware; empty for VMs. Applied and verified on local-workstation
+  (`bluetooth.service` active/enabled, `bean` in the `bluetooth` group).
+- **VNC-restart safety gate added** to `setup-remote-access.yml` — before
+  restarting the VNC server, it now checks for an established client
+  connection on the VNC port and pauses to ask for explicit confirmation
+  (skips the restart, config still applies next natural restart) rather
+  than silently dropping an active session. Verified on local-workstation
+  with no active session (silent no-op, as expected).
 
-## local-workstation (laptop, bean) — blocked until it's powered on
+## local-workstation — found, not yet fixed
 
-Nothing is *broken* here — the last full playbook run (today, before
-shutdown) applied and verified cleanly (`ok=157`, `failed=0`). These are
-things to check/do once it's back on:
+- **`tigervncserver@:1.service` fails to start** (`exited with status=1`,
+  no `:1`-display log written) — confirmed via journal this predates
+  today's session (same failure recurring since at least 2026-09-17), so
+  it's **not** something today's playbook run caused. SSH and physical
+  console login are unaffected; only VNC remote desktop to this host is
+  down. Diagnosing further needs starting `tigervncserver :1` interactively
+  as `bean` (blocked from this session by a write-action permission rule)
+  — either allow that Bash pattern, or run `tigervncserver :1` manually
+  from the console/an SSH session and read the real stderr.
 
-- **ZeroTier** — you said you'd install and configure this yourself on the
-  real hardware only (not the VM). `infra-connections.py` already handles
-  it gracefully either way (shows "not installed" until it's there, picks
-  it up automatically once it exists — no redeploy needed).
-- **Confirm the keyring-unlock dialog fix across a real reboot** — this
-  host already had one interactive unlock click during testing today, but
-  the *proactive autostart trigger* (the actual final fix) should be
-  reverified after the next real boot, same as remote-workstation above.
-- **VS Code Settings Sync + Todo-Tree** — same as remote-workstation:
-  sign-in hasn't happened yet, ripgrep fix not yet confirmed by actually
-  opening a project with TODOs in it.
-- **Physical GUI login sanity check** — lightdm was enabled/unmasked for
-  this host (bare-metal, real console) earlier in this work; worth
-  confirming it still comes up cleanly to a MATE desktop after a cold
-  boot, not just the warm-restart state it was last verified in.
+## remote-workstation (VM, kenny) — carried over, still open
+
+- **VS Code Settings Sync isn't actually turned on yet** — manual,
+  interactive GitHub sign-in step in the VS Code UI.
+- **Todo-Tree ripgrep fix not yet confirmed working** — open a workspace
+  with a `TODO`/`FIXME` comment and check the panel populates without the
+  "Failed to find vscode-ripgrep" error.
+- **Keyring-unlock dialog fix confirmed via live D-Bus testing and a VNC
+  session restart, not yet across an actual `reboot`** on this host.
+  Worth confirming next time it reboots for any reason.
+
+## local-workstation — carried over, still open
+
+- **ZeroTier** — user is installing/configuring this themselves on real
+  hardware only. `infra-connections.py` already handles it gracefully
+  either way.
+- **Confirm the keyring-unlock proactive-autostart fix across a real
+  reboot** — same caveat as remote-workstation above.
+- **VS Code Settings Sync + Todo-Tree** — same as remote-workstation.
+- **Physical GUI login sanity check** — lightdm is enabled/unmasked;
+  worth confirming a cold boot (not just warm-restart) still reaches a
+  clean MATE desktop.
 
 ## General / repo-level
 
 - **No CI yet** — playbooks are only validated by actually running them
   against the two real hosts, not via `--syntax-check`/`ansible-lint` in
   any automated pipeline.
-- **`docs/README.md` reconciliation** (see above) — lower priority, purely
-  cosmetic/accuracy, `QUICKSTART.md` is the accurate day-to-day reference
-  in the meantime.
+- **`docs/README.md` reconciliation** — lower priority, purely
+  cosmetic/accuracy; `QUICKSTART.md` is the accurate day-to-day reference
+  in the meantime. The README's "Pending Tasks" swap/disk entry for
+  local-workstation is now stale (see "done this session" above) — update
+  or remove it in that pass.
 
 ---
 
 ## Already done (for reference — not remaining work)
 
-Everything else from this session is finished and verified on both hosts:
-Tailscale IPs in inventory, disk-layout/EFI-partition fix, GPU/sound
-drivers (bare-metal only), lightdm gating by `machine_role`, Papirus-Dark
-theme, the full dev-applets port (apt-key-refresh/dotfile-sync/trays) with
-the Qt6 StatusNotifierWatcher fix, the bean-vs-kenny account split with the
-`update_password: on_create` safety fix, the fstab UUID-matching fix, the
-full build-dependency audit (fleetwm/.NET/Armbian Build Framework) applied
-fleet-wide, VS Code installed with Copilot/chat disabled, Brave/VS Code
-`password-store=basic`, and Pulsar/Zed removed from both machines.
+Everything from earlier sessions: Tailscale IPs in inventory,
+disk-layout/EFI-partition fix, GPU/sound drivers (bare-metal only),
+lightdm gating by `machine_role`, Papirus-Dark theme, the full dev-applets
+port (apt-key-refresh/dotfile-sync/trays) with the Qt6 StatusNotifierWatcher
+fix, the bean-vs-kenny account split with the `update_password: on_create`
+safety fix, the fstab UUID-matching fix, the full build-dependency audit
+(fleetwm/.NET/Armbian Build Framework) applied fleet-wide, VS Code
+installed with Copilot/chat disabled, Brave/VS Code `password-store=basic`,
+Pulsar/Zed removed from both machines, the conservative Lynis-hardening
+subset (`setup-security-hardening.yml`), plus everything under "done this
+session" above.

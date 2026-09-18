@@ -145,6 +145,35 @@
     when: (workstation_sound_packages[machine_role] | default([]) | length) > 0
     tags: [base, sound]
 
+  - name: Install Bluetooth stack for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_bluetooth_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_bluetooth_packages[machine_role] | default([]) | length) > 0
+    tags: [base, bluetooth]
+
+  - name: Enable and start bluetooth.service (only where the Bluetooth stack was installed)
+    ansible.builtin.systemd:
+      name: bluetooth
+      state: started
+      enabled: true
+    when: (workstation_bluetooth_packages[machine_role] | default([]) | length) > 0
+    tags: [base, bluetooth]
+
+  # blueman needs this to pair/trust devices without prompting for sudo each
+  # time — same idea as the sudo/docker groups above, kept as its own task
+  # (not folded into vm_enduser_groups) so a VM's end-user list stays
+  # untouched by a group that only means something with a real radio.
+  - name: Add end-user to the bluetooth group
+    ansible.builtin.user:
+      name: "{{ vm_enduser_name }}"
+      groups: bluetooth
+      append: true
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - (workstation_bluetooth_packages[machine_role] | default([]) | length) > 0
+    tags: [base, bluetooth, users]
+
   # Remote-desktop endpoints must never sleep/suspend/hibernate — there's no
   # physical way to wake a headless VM back up, and a suspended guest just
   # looks like a dead VNC/Guacamole connection. Mask the systemd targets

@@ -150,6 +150,17 @@ workstation_sound_packages:
     - pulseaudio-utils
     - pavucontrol
 
+# Bluetooth stack — bare-metal only. A VM has no real Bluetooth radio to
+# drive (Proxmox doesn't pass one through), so "vm" stays empty, same
+# pattern as GPU/sound above.
+workstation_bluetooth_packages:
+  vm: []
+  bare-metal:
+    - bluez                       # core stack — bluetoothd, hciconfig/bluetoothctl
+    - bluez-firmware               # firmware blobs some Bluetooth/combo-WiFi adapters need
+    - pulseaudio-module-bluetooth  # A2DP/HSP audio routing through the existing PulseAudio stack
+    - blueman                      # GTK pairing UI + MATE panel tray applet
+
 # ---------------------------------------------------------------------------
 # MATE desktop (setup-mate-desktop.yml)
 # Minimal MATE stack only — deliberately avoids task-mate-desktop, which

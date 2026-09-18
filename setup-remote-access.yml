@@ -27,6 +27,47 @@
 
   tasks:
 
+  # Safety gate: restarting the VNC server (handler below) kills the Xvnc
+  # process outright — anyone connected right now gets dropped mid-session,
+  # no warning. Detect an established client connection on the VNC port
+  # BEFORE any task that can notify that handler, so the handler can check
+  # the result and refuse to fire without explicit confirmation instead of
+  # silently kicking whoever's on it.
+  - name: Check for an active VNC client connection
+    ansible.builtin.shell: |
+      set -o pipefail
+      ss -tn state established "( sport = :{{ 5900 + (vnc_display | int) }} )" | grep -c ESTAB || true
+    args:
+      executable: /bin/bash
+    register: vnc_active_check
+    changed_when: false
+    tags: [remote-access, vnc, safety]
+
+  - name: Set fact for active VNC session
+    ansible.builtin.set_fact:
+      vnc_has_active_session: "{{ (vnc_active_check.stdout | trim | int(default=0)) > 0 }}"
+    tags: [remote-access, vnc, safety]
+
+  # Only prompts when a client is actually connected — silent/no-op the rest
+  # of the time. Typing anything other than exactly "yes" (including just
+  # hitting Enter) leaves vnc_restart_ok false, so the handler below skips
+  # the restart and the play continues (config still gets written, it just
+  # won't take effect until the next natural restart/logout).
+  - name: Ask before restarting VNC while a client is connected
+    ansible.builtin.pause:
+      prompt: |
+        An active VNC client is connected to {{ inventory_hostname }} display :{{ vnc_display }}.
+        Restarting the VNC server now will disconnect that session immediately.
+        Type 'yes' to restart anyway, or press Enter to skip the restart this run.
+    register: vnc_restart_confirm
+    when: vnc_has_active_session
+    tags: [remote-access, vnc, safety]
+
+  - name: Record whether the VNC restart may proceed
+    ansible.builtin.set_fact:
+      vnc_restart_ok: "{{ (not vnc_has_active_session) or (vnc_restart_confirm.user_input | default('') | lower == 'yes') }}"
+    tags: [remote-access, vnc, safety]
+
   - name: Install TigerVNC packages
     ansible.builtin.apt:
       name: "{{ remote_access_packages }}"
@@ -192,6 +233,18 @@
       - "========================================================"
     tags: [remote-access, summary]
 
+  - name: Flush handlers so the restart-skip note below reflects what actually happened
+    ansible.builtin.meta: flush_handlers
+
+  - name: Note that a pending VNC config change did not take effect
+    ansible.builtin.debug:
+      msg: >-
+        VNC config/password changed on {{ inventory_hostname }} but the restart was
+        skipped because a client was connected and restart wasn't confirmed — the
+        new config takes effect on the next natural restart or client disconnect/logout.
+    when: vnc_has_active_session and not (vnc_restart_ok | default(true) | bool)
+    tags: [remote-access, vnc, summary]
+
   handlers:
   - name: Reload systemd
     ansible.builtin.systemd:
@@ -201,4 +254,5 @@
     ansible.builtin.systemd:
       name: "tigervncserver@:{{ vnc_display }}.service"
       state: restarted
+    when: vnc_restart_ok | default(true) | bool
     failed_when: false
