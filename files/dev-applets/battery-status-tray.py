@@ -65,47 +65,59 @@ def _read_battery() -> dict:
 
 
 def _battery_icon(percent: int, state: str) -> QIcon:
-    """Render the pill-shaped battery icon at 2x for crisp panel scaling."""
-    w, h = 64, 32
-    pix = QPixmap(w, h)
+    """Square color-coded badge with the percentage as large as the icon
+    allows, plus a thin charge-level bar along the bottom.
+
+    A wide pill-shaped icon (the first version of this) gets forced into
+    whatever square-ish slot the tray host allocates for SNI icons — the
+    outline/nub ate most of that space and the number was unreadably
+    small. Square avoids the squish entirely and spends the pixel budget
+    on the digits instead.
+    """
+    size = 64  # oversampled square; downscales cleanly to actual tray size
+    pix = QPixmap(size, size)
     pix.fill(QColor(0, 0, 0, 0))
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    body = QRectF(2, 4, 52, 24)
-    nub = QRectF(55, 11, 6, 10)
-
     if state == "charging":
-        fill_color = GREEN
+        bg_color = GREEN
+        text_color = TEXT_ON_DARK
     elif state == "discharging" and percent <= 20:
-        fill_color = RED
+        bg_color = RED
+        text_color = TEXT_ON_DARK
     else:
-        fill_color = NORMAL
+        bg_color = NORMAL
+        text_color = TEXT_ON_LIGHT
 
-    # Outline (body + nub)
-    p.setPen(OUTLINE)
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    outline_path = QPainterPath()
-    outline_path.addRoundedRect(body, 6, 6)
-    p.drawPath(outline_path)
-    p.drawRoundedRect(nub, 2, 2)
-
-    # Proportional fill, inset from the outline
-    inset = body.adjusted(3, 3, -3, -3)
-    fill_w = max(2.0, inset.width() * (max(0, min(100, percent)) / 100.0))
-    fill_rect = QRectF(inset.x(), inset.y(), fill_w, inset.height())
+    badge = QRectF(2, 2, size - 4, size - 4)
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(fill_color)
-    fill_path = QPainterPath()
-    fill_path.addRoundedRect(fill_rect, 3, 3)
-    p.drawPath(fill_path)
+    p.setBrush(bg_color)
+    badge_path = QPainterPath()
+    badge_path.addRoundedRect(badge, 14, 14)
+    p.drawPath(badge_path)
 
-    # Percentage, centered over the whole body — readable against both the
-    # light NORMAL/GREEN fills and the darker RED low-battery fill.
-    font = QFont("Sans", 12, QFont.Weight.Bold)
+    # Thin charge-level bar along the bottom — the one remaining "battery"
+    # cue now that the outline/pill shape is gone.
+    bar = badge.adjusted(8, badge.height() - 10, -8, -6)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(OUTLINE)
+    bar_bg_path = QPainterPath()
+    bar_bg_path.addRoundedRect(bar, 2, 2)
+    p.drawPath(bar_bg_path)
+    fill_w = max(2.0, bar.width() * (max(0, min(100, percent)) / 100.0))
+    fill_bar = QRectF(bar.x(), bar.y(), fill_w, bar.height())
+    p.setBrush(text_color)
+    bar_fill_path = QPainterPath()
+    bar_fill_path.addRoundedRect(fill_bar, 2, 2)
+    p.drawPath(bar_fill_path)
+
+    # Percentage, large and bold, filling most of the badge above the bar.
+    font = QFont("Sans", 24, QFont.Weight.Bold)
     p.setFont(font)
-    p.setPen(TEXT_ON_DARK if fill_color == RED else TEXT_ON_LIGHT)
-    p.drawText(body, Qt.AlignmentFlag.AlignCenter, str(percent))
+    p.setPen(text_color)
+    text_area = badge.adjusted(0, 0, 0, -12)
+    p.drawText(text_area, Qt.AlignmentFlag.AlignCenter, str(percent))
 
     p.end()
     return QIcon(pix)
