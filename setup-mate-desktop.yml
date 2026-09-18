@@ -310,6 +310,75 @@
     notify: Update dconf databases
     tags: [mate, dconf, theme]
 
+  # ---------------------------------------------------------------------
+  # Per-workstation wallpaper — see files/wallpapers/README.md. Looked up
+  # by inventory hostname on the controller so each host in the fleet gets
+  # its own image with zero host_vars plumbing; a host with no file yet
+  # just keeps its current background until one's added, nothing breaks.
+  # ---------------------------------------------------------------------
+  - name: Ensure the wallpaper directory exists
+    ansible.builtin.file:
+      path: /usr/share/backgrounds/stationctl
+      state: directory
+      mode: "0755"
+    tags: [mate, wallpaper]
+
+  # query('fileglob', ...) always runs on the controller regardless of
+  # which host the task targets — no delegate_to/become needed just to
+  # check what's in the repo's own files/wallpapers/ directory.
+  - name: Look up this host's wallpaper image (files/wallpapers/<hostname>.*)
+    ansible.builtin.set_fact:
+      _wallpaper_matches: "{{ query('fileglob', playbook_dir + '/files/wallpapers/' + inventory_hostname + '.*') }}"
+    tags: [mate, wallpaper]
+
+  - name: Deploy this host's wallpaper image
+    ansible.builtin.copy:
+      src: "wallpapers/{{ _wallpaper_matches[0] | basename }}"
+      dest: "/usr/share/backgrounds/stationctl/{{ _wallpaper_matches[0] | basename }}"
+      owner: root
+      group: root
+      mode: "0644"
+    when: _wallpaper_matches | length > 0
+    tags: [mate, wallpaper]
+
+  - name: Set this host's wallpaper as the MATE desktop background
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/04-wallpaper
+      content: |
+        [org/mate/desktop/background]
+        picture-filename='/usr/share/backgrounds/stationctl/{{ _wallpaper_matches[0] | basename }}'
+        picture-options='zoom'
+      owner: root
+      group: root
+      mode: "0644"
+    when: _wallpaper_matches | length > 0
+    notify: Update dconf databases
+    tags: [mate, wallpaper]
+
+  - name: Note that no wallpaper image was found for this host yet
+    ansible.builtin.debug:
+      msg: >-
+        No wallpaper image found for {{ inventory_hostname }} at
+        files/wallpapers/{{ inventory_hostname }}.* — drop one in and re-run
+        with --tags wallpaper to apply it. Current background left as-is.
+    when: _wallpaper_matches | length == 0
+    tags: [mate, wallpaper]
+
+  # desktop-base ships ~10 unrelated bundled theme sets (grub splash images,
+  # plymouth boot themes, lockscreen/login backgrounds, and the "swirl"
+  # wallpaper MATE was defaulting to via /usr/share/images/desktop-base) —
+  # dead weight once a host has its own managed wallpaper above.
+  # grub-common/plymouth/lightdm-gtk-greeter only *suggest* it, nothing
+  # actually depends on it (confirmed via `apt-get -s purge desktop-base`
+  # on local-workstation, 2026-09-18: 0 broken, plymouth/grub untouched),
+  # so purging it is safe and doesn't cascade into removing plymouth.
+  - name: Purge desktop-base (bundled themes/wallpapers/splash images, unused)
+    ansible.builtin.apt:
+      name: desktop-base
+      state: absent
+      purge: true
+    tags: [mate, cleanup]
+
   # mate-power-manager comes along with mate-desktop-environment-core and
   # autostarts via XDG autostart (not a systemd unit), polling upower for
   # battery/AC status. Pure overhead on a VM with no battery to report on;
