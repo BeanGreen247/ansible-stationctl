@@ -162,6 +162,19 @@ workstation_power_packages:
     - mate-power-manager
     - upower
 
+# WiFi/network management — bare-metal only. The wired interface
+# (enp4s0) stays on ifupdown/interfaces (untouched — see setup-base-
+# debian.yml's install task comment for why this is safe); this is
+# purely to make the laptop's WiFi radio (wlp5s0, otherwise
+# unconfigured/DOWN) reachable through a GUI applet instead of hand-
+# editing /etc/network/interfaces for every network. remote-workstation
+# is a VM with no WiFi hardware, so "vm" stays empty.
+workstation_networkmanager_packages:
+  vm: []
+  bare-metal:
+    - network-manager
+    - network-manager-gnome
+
 # Bluetooth stack — bare-metal only. A VM has no real Bluetooth radio to
 # drive (Proxmox doesn't pass one through), so "vm" stays empty, same
 # pattern as GPU/sound above.

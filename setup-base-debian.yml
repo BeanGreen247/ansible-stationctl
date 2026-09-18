@@ -152,6 +152,31 @@
     when: (workstation_power_packages[machine_role] | default([]) | length) > 0
     tags: [base, power]
 
+  # Debian's network-manager package ships with [ifupdown] managed=false
+  # in its default /etc/NetworkManager/NetworkManager.conf — any interface
+  # already defined in /etc/network/interfaces (enp4s0, lo, on this fleet)
+  # stays untouched/unmanaged, and NetworkManager only picks up interfaces
+  # that AREN'T listed there (i.e. wlp5s0). Confirmed by extracting the
+  # actual .deb's conffile before ever installing it, specifically to
+  # avoid this exact package silently taking over the interface this
+  # SSH session runs over. Verified live after install too (see
+  # docs/QUICKSTART.md's hard rule) — tailscale0/docker0 stayed up and
+  # unmanaged, only wlp5s0 came under NetworkManager's control.
+  - name: Install NetworkManager + applet for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_networkmanager_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_networkmanager_packages[machine_role] | default([]) | length) > 0
+    tags: [base, networkmanager]
+
+  - name: Enable and start NetworkManager (only where it was installed)
+    ansible.builtin.systemd:
+      name: NetworkManager
+      state: started
+      enabled: true
+    when: (workstation_networkmanager_packages[machine_role] | default([]) | length) > 0
+    tags: [base, networkmanager]
+
   - name: Install Bluetooth stack for this machine's role
     ansible.builtin.apt:
       name: "{{ workstation_bluetooth_packages[machine_role] | default([]) }}"
