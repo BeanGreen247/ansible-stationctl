@@ -4,7 +4,16 @@ object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', {%
 
 [org/mate/panel/toplevels/bottom]
 orientation='bottom'
-size=32
+# Legacy XEmbed tray icons (nm-applet, mate-volume-control-status-icon)
+# render at EXACTLY this panel height with zero internal padding —
+# confirmed via `xwininfo`, their embedded windows were literally 32x32
+# at size=32, while native panel applets/SNI icons pad themselves and
+# looked proportionate at the same height. There's no separate icon-size
+# knob for the legacy tray (checked org.mate.panel.toplevel's schema —
+# nothing), so panel height is the only real lever. 24 confirmed live
+# (dconf write + screenshot) to make those two proportionate again
+# without making text/other applets illegible.
+size=24
 auto-hide=false
 expand=true
 
