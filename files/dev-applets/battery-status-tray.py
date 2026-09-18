@@ -29,10 +29,9 @@ POLL_INTERVAL_MS = 30_000
 GREEN    = QColor("#34c759")  # charging
 RED      = QColor("#ff3b30")  # low, on battery
 NORMAL   = QColor("#f2f2f7")  # normal charge level (near-white, iOS default)
-EMPTY_BG = QColor("#3a3a3c")  # unfilled portion of the body — dark, reads as "empty"
-OUTLINE  = QColor("#8e8e93")
-TEXT_ON_LIGHT = QColor("#000000")
-TEXT_ON_DARK  = QColor("#ffffff")
+EMPTY_BG = QColor("#c7c7cc")  # unfilled portion — light, so dark text stays readable on it
+OUTLINE  = QColor("#48484a")
+TEXT_ON_LIGHT = QColor("#1c1c1e")
 
 
 def _read_battery() -> dict:
@@ -70,14 +69,12 @@ def _read_battery() -> dict:
 
 def _battery_icon(percent: int, state: str) -> QIcon:
     """Horizontal battery icon (on its side, terminal nub on the right):
-    charge fills from the LEFT — so on discharge the empty (dark) area
-    grows from the right, retreating toward the nub, same physical
-    orientation as the earlier vertical version just rotated 90°
-    (nub top->right, fill bottom->left). Percentage sits on a
-    translucent dark band across the middle so it stays legible over
-    any fill color/width.
+    charge fills from the LEFT — so on discharge the empty area grows
+    from the right, retreating toward the nub. The unfilled portion is
+    light (not dark) specifically so dark text reads directly on top of
+    it everywhere, with no separate background band needed.
     """
-    w, h = 72, 44
+    w, h = 120, 72
     pix = QPixmap(w, h)
     pix.fill(QColor(0, 0, 0, 0))
     p = QPainter(pix)
@@ -91,19 +88,20 @@ def _battery_icon(percent: int, state: str) -> QIcon:
         fill_color = NORMAL
 
     pct = max(0, min(100, percent))
-    body = QRectF(4, 5, 56, 32)
-    nub = QRectF(body.right(), body.center().y() - 8, 8, 16)
+    body = QRectF(6, 8, 96, 56)
+    nub = QRectF(body.right(), body.center().y() - 13, 12, 26)
     body_path = QPainterPath()
-    body_path.addRoundedRect(body, 8, 8)
+    body_path.addRoundedRect(body, 12, 12)
 
     # Terminal nub
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(OUTLINE)
     nub_path = QPainterPath()
-    nub_path.addRoundedRect(nub, 2, 2)
+    nub_path.addRoundedRect(nub, 3, 3)
     p.drawPath(nub_path)
 
-    # Empty body background
+    # Unfilled body background — light, so the dark percentage text stays
+    # readable here too, not just over the colored fill.
     p.setBrush(EMPTY_BG)
     p.drawPath(body_path)
 
@@ -123,18 +121,10 @@ def _battery_icon(percent: int, state: str) -> QIcon:
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.drawPath(body_path)
 
-    # Percentage on a translucent dark band — legible regardless of what
-    # fill color/width sits behind it at that point.
-    band = QRectF(body.x(), body.center().y() - 12, body.width(), 24)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(0, 0, 0, 140))
-    band_path = QPainterPath()
-    band_path.addRoundedRect(band, 5, 5)
-    p.drawPath(band_path)
-
-    font = QFont("Sans", 19, QFont.Weight.Black)
+    # Percentage, dark, drawn straight on the body — no background band.
+    font = QFont("Sans", 34, QFont.Weight.Black)
     p.setFont(font)
-    p.setPen(TEXT_ON_DARK)
+    p.setPen(TEXT_ON_LIGHT)
     p.drawText(body, Qt.AlignmentFlag.AlignCenter, str(pct))
 
     p.end()
