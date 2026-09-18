@@ -196,6 +196,15 @@ dev_packages:
   - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
   - idle          # provides idlelib, used by some homegrown editor scripts
   - keepassxc
+  # Required by both VS Code markdown extensions' PDF/DOCX export path
+  # (shd101wyy.markdown-preview-enhanced, yzhang.markdown-all-in-one) — found
+  # missing 2026-09-18 during a full extension-dependency audit. Everything
+  # else those extensions need (Mermaid rendering, GFM styling, linting) is
+  # bundled JS with no external binary. PlantUML/Graphviz support in
+  # markdown-preview-enhanced also needs `java`+`graphviz`, left out for now
+  # since no repo content actually uses PlantUML diagrams (all diagrams here
+  # are Mermaid) — add if that changes.
+  - pandoc
   - dotnet-sdk-9.0    # from Microsoft's apt repo (setup-dev-tools.yml) — for .NET projects (net9.0)
   # C/C++ build essentials meson/cmake actually need to resolve dependencies —
   # build-essential alone doesn't cover this; without pkg-config, meson/cmake
@@ -450,6 +459,13 @@ workstation_pip_packages:
   - qrcode
   - prometheus_client
   - peewee
+  # Used by the redhat.ansible VS Code extension's built-in lint integration
+  # against this repo's own playbooks. Found broken on remote-workstation
+  # 2026-09-18 (manually installed, missing wcmatch/jsonschema/black/etc. —
+  # a partial/interrupted pip install, not a version issue) — ansible.builtin.pip
+  # resolves the full dependency tree correctly, unlike the ad-hoc fix, so
+  # this prevents the same breakage recurring on any other workstation.
+  - ansible-lint
 
 # ---------------------------------------------------------------------------
 # Remote access (setup-remote-access.yml)
