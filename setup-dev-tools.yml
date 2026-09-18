@@ -161,85 +161,71 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [dev, vscode]
 
-  - name: Ensure end-user's VS Code User settings directory exists
+  # VS Code ships a built-in "Agents" profile (~/.config/Code/User/profiles/
+  # builtin/agents) tied to the Chat/Agents feature we disable everywhere via
+  # chat.disableAIFeatures. Confirmed on 2026-09-18 that removing both the
+  # directory and its userDataProfiles entry in globalStorage/storage.json is
+  # permanent — VS Code does not recreate it on next launch once the Agents
+  # feature is disabled. Both steps are safe/idempotent on a fresh host where
+  # neither has been created yet (file/module no-op when the target is
+  # already absent).
+  - name: Remove VS Code's built-in Agents profile directory
     ansible.builtin.file:
-      path: "/home/{{ vm_enduser_name }}/.config/Code/User"
-      state: directory
-      owner: "{{ vm_enduser_name }}"
-      group: "{{ vm_enduser_name }}"
-      mode: "0755"
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/profiles/builtin"
+      state: absent
     when: vm_enduser_name | default('') | length > 0
     tags: [dev, vscode]
 
-  # Seeded once (force: false — never overwrites, so it doesn't fight
-  # whatever Settings Sync later pulls down or the user edits by hand).
-  # Disables GitHub Copilot's suggestions/chat if that extension is ever
-  # installed (these keys are inert no-ops otherwise) plus the built-in
-  # Chat/inline-chat UI entry points that ship in core VS Code regardless
-  # of Copilot being installed, and stops VS Code from recommending
-  # Copilot in the first place.
-  - name: Disable Copilot/AI chat features in VS Code user settings
-    ansible.builtin.copy:
-      dest: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
-      content: |
-        {
-            "github.copilot.enable": {
-                "*": false,
-                "plaintext": false,
-                "markdown": false,
-                "scminput": false
-            },
-            "github.copilot.editor.enableAutoCompletions": false,
-            "github.copilot.editor.enableCodeActions": false,
-            "chat.commandCenter.enabled": false,
-            "inlineChat.enabled": false,
-            "extensions.ignoreRecommendations": true
-        }
-      owner: "{{ vm_enduser_name }}"
-      group: "{{ vm_enduser_name }}"
-      mode: "0644"
-      force: false
+  - name: Check whether globalStorage/storage.json exists yet
+    ansible.builtin.stat:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/globalStorage/storage.json"
+    register: _vscode_storage_json
     when: vm_enduser_name | default('') | length > 0
     tags: [dev, vscode]
 
-  # The copy above (force: false) never overwrites a pre-existing
-  # settings.json — one host had a large, genuinely user-customized file
-  # already (predates this playbook) with these two keys explicitly set to
-  # true, contradicting the ask. Patch only these specific lines in place
-  # rather than risk clobbering real customization; backrefs means this is
-  # a no-op wherever the pattern isn't present (e.g. the freshly-seeded
-  # file above, which uses a different key shape entirely).
-  - name: Force-disable github.copilot.enable if a pre-existing settings.json has it on
-    ansible.builtin.lineinfile:
-      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
-      regexp: '^(\s*"github\.copilot\.enable"\s*:\s*)true(,?)\s*$'
-      line: '\1false\2'
-      backrefs: true
-    when: vm_enduser_name | default('') | length > 0
+  - name: Check whether storage.json still references the Agents profile
+    ansible.builtin.command:
+      cmd: grep -q '"builtin/agents"' "/home/{{ vm_enduser_name }}/.config/Code/User/globalStorage/storage.json"
+    register: _agents_profile_present
+    changed_when: false
+    failed_when: false
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _vscode_storage_json.stat.exists
     tags: [dev, vscode]
 
-  - name: Force-disable chat.agent.enabled if a pre-existing settings.json has it on
-    ansible.builtin.lineinfile:
-      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
-      regexp: '^(\s*"chat\.agent\.enabled"\s*:\s*)true(,?)\s*$'
-      line: '\1false\2'
-      backrefs: true
-    when: vm_enduser_name | default('') | length > 0
+  # Expression-only Python (no for/if blocks) so it survives being passed as
+  # a single argv entry without YAML folding mangling indentation — that's
+  # what broke the first version of this task (block-scalar folding
+  # collapsed the for-loop's newlines into spaces, breaking Python syntax).
+  - name: Strip the Agents profile entry from globalStorage/storage.json
+    ansible.builtin.command:
+      argv:
+        - python3
+        - -c
+        - |
+          import json
+          path = '/home/{{ vm_enduser_name }}/.config/Code/User/globalStorage/storage.json'
+          d = json.load(open(path))
+          d['userDataProfiles'] = [p for p in d.get('userDataProfiles', []) if p.get('location') != 'builtin/agents']
+          assoc = d.get('profileAssociations', {}).get('workspaces', {})
+          [assoc.__setitem__(k, '__default__profile__') for k, v in list(assoc.items()) if v == 'builtin/agents']
+          json.dump(d, open(path, 'w'), indent=4)
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _vscode_storage_json.stat.exists
+      - _agents_profile_present.rc == 0
     tags: [dev, vscode]
 
-  # Todo-Tree bundles its own ripgrep download, which can fail in sandboxed/
-  # offline install scenarios ("Failed to find vscode-ripgrep") — point it
-  # at the system package instead (already installed via
-  # sysadmin_cli_packages). Inserted right after the opening brace rather
-  # than templated as a whole file, since both hosts already have real
-  # pre-existing settings.json content this must not clobber.
-  - name: Point Todo-Tree at the system ripgrep binary
-    ansible.builtin.lineinfile:
-      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
-      insertafter: '^\{$'
-      line: '    "todo-tree.ripgrep": "/usr/bin/rg",'
-    when: vm_enduser_name | default('') | length > 0
-    tags: [dev, vscode]
+  # settings.json and installed extensions are deliberately NOT managed here
+  # (no seed content, no lineinfile/blockinfile patches, no extension
+  # installs). Both are owned by VS Code Settings Sync against the end
+  # user's own GitHub account instead — Copilot/AI-tool blocking
+  # (extensions.allowed), chat.disableAIFeatures, Todo-Tree's ripgrep path,
+  # etc. all live in the synced settings.json itself and propagate to every
+  # machine on that account on their own. Re-running this playbook must not
+  # fight that: it only touches argv.json (below), which Settings Sync does
+  # not cover.
 
   - name: Install dev tool packages
     ansible.builtin.apt:
