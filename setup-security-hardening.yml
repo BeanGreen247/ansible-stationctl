@@ -1,0 +1,146 @@
+# setup-security-hardening.yml
+#
+# Overview
+#   A curated subset of Lynis's suggestions (run 2026-09-18, see the
+#   scan's own output for full context), deliberately NOT exhaustive.
+#   Everything here was picked because it has no realistic chance of
+#   breaking anything this fleet already relies on — SSH multiplexing
+#   (ansible.cfg's ControlMaster/ControlPersist + forks=5), the dev
+#   toolchain (gcc/clang need to stay usable by the end-user), or the
+#   deliberately tight resource budget these workstations are tuned for
+#   (see setup-performance-tuning.yml/setup-kernel-perf-tuning.yml).
+#   Suggestions that could plausibly break any of that (SSH port/session
+#   limits/forwarding, compiler lockdown, auditd/AIDE resource cost,
+#   swappiness/sysctl "fixes" that are actually our own intentional
+#   tuning) were deliberately left out — see docs/QUICKSTART.md or the
+#   commit history for the full triage.
+#
+# Target hosts
+#   ansible-playbook setup-security-hardening.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Apply a conservative subset of Lynis hardening suggestions
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  - name: Install lightweight hardening/diagnostic packages
+    ansible.builtin.apt:
+      name:
+        - libpam-tmpdir      # sets $TMP/$TMPDIR per PAM session [DEB-0280]
+        - libpam-passwdqc    # password strength on future password changes [AUTH-9262]
+        - fail2ban           # bans hosts with repeated auth failures [DEB-0880]
+        - debsums            # verifies packages against known-good checksums [PKGS-7370]
+        - apt-show-versions  # patch-management visibility [PKGS-7394]
+        - rkhunter           # on-demand rootkit/malware scan, not a daemon [HRDN-7230]
+      state: present
+    tags: [security, packages]
+
+  # fail2ban's own default jail.conf ships the sshd jail DISABLED — a
+  # jail.local override is the documented way to enable it without editing
+  # the package-owned file directly (jail.local always wins on conflict).
+  - name: Enable fail2ban's sshd jail
+    ansible.builtin.copy:
+      dest: /etc/fail2ban/jail.local
+      content: |
+        [sshd]
+        enabled = true
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Restart fail2ban
+    tags: [security, fail2ban]
+
+  - name: Ensure fail2ban is enabled and running
+    ansible.builtin.systemd:
+      name: fail2ban
+      state: started
+      enabled: true
+    tags: [security, fail2ban]
+
+  # Low-risk SSH hardening only [SSH-7408] — MaxAuthTries/LogLevel are
+  # cosmetic/safe. Port, forwarding, session-limit, and keepalive changes
+  # from the same Lynis control are deliberately NOT applied here — see
+  # this file's header.
+  - name: Lower SSH MaxAuthTries (6 -> 3)
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?MaxAuthTries'
+      line: 'MaxAuthTries 3'
+      validate: '/usr/sbin/sshd -t -f %s'
+    notify: Restart sshd
+    tags: [security, ssh]
+
+  - name: Raise SSH LogLevel (INFO -> VERBOSE)
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?LogLevel'
+      line: 'LogLevel VERBOSE'
+      validate: '/usr/sbin/sshd -t -f %s'
+    notify: Restart sshd
+    tags: [security, ssh]
+
+  # [NETW-3200] — none of these protocols are used anywhere in this
+  # fleet (SSH/VNC/Tailscale/Docker all use TCP/UDP).
+  - name: Blacklist unused network protocol kernel modules
+    ansible.builtin.copy:
+      dest: /etc/modprobe.d/stationctl-blacklist-protocols.conf
+      content: |
+        install dccp /bin/false
+        install sctp /bin/false
+        install rds /bin/false
+        install tipc /bin/false
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [security, kernel]
+
+  # [BANN-7126, BANN-7130] — cosmetic legal notice, zero functional impact.
+  - name: Deploy pre-login legal banner
+    ansible.builtin.copy:
+      dest: "{{ item }}"
+      content: |
+        Authorized access only. All activity may be monitored and logged.
+      owner: root
+      group: root
+      mode: "0644"
+    loop:
+      - /etc/issue
+      - /etc/issue.net
+    tags: [security, banner]
+
+  - name: Point sshd at the banner file
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?Banner'
+      line: 'Banner /etc/issue.net'
+      validate: '/usr/sbin/sshd -t -f %s'
+    notify: Restart sshd
+    tags: [security, ssh, banner]
+
+  - name: Print hardening summary
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "Security hardening applied on: {{ inventory_hostname }}"
+      - "  fail2ban:      sshd jail enabled"
+      - "  SSH:           MaxAuthTries=3, LogLevel=VERBOSE, banner set"
+      - "  Kernel:        dccp/sctp/rds/tipc blacklisted"
+      - "  rkhunter installed (on-demand — run 'sudo rkhunter --check' manually,"
+      - "  no periodic timer added to keep resource footprint unchanged)"
+      - "========================================================"
+    tags: [security, summary]
+
+  handlers:
+  - name: Restart sshd
+    ansible.builtin.service:
+      name: sshd
+      state: restarted
+
+  - name: Restart fail2ban
+    ansible.builtin.systemd:
+      name: fail2ban
+      state: restarted
