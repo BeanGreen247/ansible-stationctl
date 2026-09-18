@@ -35,6 +35,53 @@ Only use `ansible-playbook site.yml -u root --ask-pass --limit <host>` (or
 
 ---
 
+## Hard rule: never break access
+
+Any change touching SSH (`sshd_config`, `setup-base-debian.yml`,
+`setup-security-hardening.yml`), VNC (`setup-remote-access.yml`), PAM, or
+network/firewall config follows this sequence, no exceptions:
+
+1. **Research first.** Read the docs for whatever's being changed
+   (`man sshd_config`, the TigerVNC/fail2ban/PAM docs, etc.) specifically for
+   caveats that could lock out access — not just "does this setting exist,"
+   but "what happens if this is wrong, and how do I know before it's live."
+   The 2026-09-18 VNC `$interface` regression (bound to `127.0.0.1` instead
+   of the intended Tailscale IP, killing VNC reachability entirely) happened
+   because this step was skipped — see the comment in
+   `setup-remote-access.yml` above the VNC config task.
+2. **Dry-run before applying for real**: `ansible-playbook <playbook> --limit
+   <host> --check --diff`. Read the diff; confirm it's what's expected.
+   Note: `--check` can't validate service-restart behavior (VNC/sshd won't
+   actually rebind under `--check`), so for anything that changes how a
+   *service* binds or authenticates, step 1's research has to cover what
+   `--check` can't show you.
+3. **Validate config syntax before restart, not after** — e.g. `sshd_config`
+   edits already use `validate: '/usr/sbin/sshd -t -f %s'` in this repo;
+   any new access-critical config file this repo manages should get an
+   equivalent syntax-check task before its restart handler fires, if the
+   tool provides one.
+4. **Never restart the session you're running the playbook from.** This
+   repo's controller session runs inside the target VM's own desktop
+   session for `remote-workstation` — restarting VNC from within that same
+   VNC session kills the shell mid-run. Know before you notify a restart
+   handler whether it affects the connection currently applying the change.
+5. **Verify from a second path after applying** — a second SSH session, a
+   fresh VNC client connection, `ss -tlnp` for the expected listening
+   sockets — before considering the change done. Don't rely on the
+   Ansible run reporting success; a service can restart "successfully" and
+   still be unreachable (exactly what happened with the VNC regression).
+6. **Have a revert ready.** Know the exact previous config/task state before
+   applying, so a broken change can be reverted immediately instead of
+   diagnosed live while access is down.
+
+If a change can't be verified this way (e.g. the target host is the only
+one you can reach, no second path exists), that's a reason to be *more*
+conservative, not less — prefer the smallest change that gets the Lynis/
+hardening benefit, matching the existing triage in
+`setup-security-hardening.yml`'s header comment.
+
+---
+
 ## "I want to change X" → edit here → run this
 
 | I want to... | Edit | Then run |
