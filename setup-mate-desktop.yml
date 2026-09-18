@@ -187,6 +187,27 @@
       mode: "0755"
     tags: [mate, dconf, panel]
 
+  # Backs the panel-layout "separator" object (templates/panel-layout.ini.j2)
+  # — a Command applet, not MATE's native 'separator' object-type, which
+  # draws a themed groove/line via a hardcoded Cairo call inside mate-panel
+  # that no amount of GTK CSS can reach (confirmed: even a blanket
+  # `* { color: red !important }` in a system-wide gtk.css had zero effect
+  # on it). A Command applet renders as bare text with no border/background
+  # of its own, so it's invisible spacing by construction — as long as its
+  # output isn't truly empty: a completely empty stdout renders as a
+  # stray "#" placeholder (confirmed live), so this prints a single space
+  # instead, which renders as nothing.
+  - name: Deploy blank spacer script for the panel Command applet
+    ansible.builtin.copy:
+      dest: /usr/local/bin/stationctl-blank.sh
+      content: |
+        #!/bin/sh
+        printf ' '
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [mate, dconf, panel]
+
   # Battery/AC status moved to a proper iOS-style tray icon
   # (battery-status-tray, setup-dev-applets.yml) and that in turn by the
   # native battstat panel applet just below — remove the leftover script

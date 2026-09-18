@@ -1,6 +1,6 @@
 [org/mate/panel/general]
 toplevel-id-list=['bottom']
-object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', {% if machine_role == 'bare-metal' %}'battery', {% endif %}'ram-status', 'sysmonitor', 'clock']
+object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', 'separator', {% if machine_role == 'bare-metal' %}'battery', {% endif %}'ram-status', 'sysmonitor', 'clock']
 
 [org/mate/panel/toplevels/bottom]
 orientation='bottom'
@@ -12,8 +12,9 @@ orientation='bottom'
 # knob for the legacy tray (checked org.mate.panel.toplevel's schema —
 # nothing), so panel height is the only real lever. 24 confirmed live
 # (dconf write + screenshot) to make those two proportionate again
-# without making text/other applets illegible.
-size=24
+# without making text/other applets illegible; bumped to 28 per a later
+# explicit size request.
+size=28
 auto-hide=false
 expand=true
 
@@ -34,7 +35,7 @@ panel-right-stick=false
 object-type='applet'
 applet-iid='NotificationAreaAppletFactory::NotificationArea'
 toplevel-id='bottom'
-position=10
+position=7
 panel-right-stick=true
 
 # StatusNotifierItem/AppIndicator host — Qt6 apps (dotfile-sync-tray,
@@ -44,8 +45,32 @@ panel-right-stick=true
 object-type='applet'
 applet-iid='IndicatorAppletCompleteFactory::IndicatorAppletComplete'
 toplevel-id='bottom'
-position=9
+position=8
 panel-right-stick=true
+
+# Visual spacer between the notification/tray cluster and the sysmonitor
+# graphs. NOT MATE's native 'separator' object-type — that one draws a
+# themed groove/line via a hardcoded Cairo render call inside mate-panel
+# itself (panel_separator_change_background / gtk_render_line), which
+# isn't reachable through GTK CSS at all (confirmed: even a blanket
+# `* { color: red !important }` in /etc/gtk-3.0/gtk.css had zero visual
+# effect on it — GTK wasn't even loading that stylesheet for mate-panel
+# in the first place). A blank Command applet has no border/background
+# of its own (same as ram-status/battery-status-adjacent text elsewhere
+# on this panel — always rendered as bare text with no visible box), so
+# an empty one is just invisible spacing by construction, no CSS needed.
+[org/mate/panel/objects/separator]
+object-type='applet'
+applet-iid='CommandAppletFactory::CommandApplet'
+toplevel-id='bottom'
+position=6
+panel-right-stick=true
+
+[org/mate/panel/objects/separator/prefs]
+command='/usr/local/bin/stationctl-blank.sh'
+interval=3600
+show-icon=false
+width=16
 
 {% if machine_role == 'bare-metal' %}
 # Battery charge — MATE's own native panel applet (battstat, from
@@ -60,7 +85,7 @@ panel-right-stick=true
 object-type='applet'
 applet-iid='BattstatAppletFactory::BattstatApplet'
 toplevel-id='bottom'
-position=6
+position=9
 panel-right-stick=true
 
 [org/mate/panel/objects/battery/prefs]
@@ -71,7 +96,7 @@ show-text=1
 object-type='applet'
 applet-iid='CommandAppletFactory::CommandApplet'
 toplevel-id='bottom'
-position=7
+position=10
 panel-right-stick=true
 
 [org/mate/panel/objects/ram-status/prefs]
