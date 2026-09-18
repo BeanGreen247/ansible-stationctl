@@ -337,12 +337,32 @@
     when: machine_role | default('vm') == 'vm'
     tags: [mate, power]
 
-  - name: Ensure mate-power-manager autostart override is absent on non-VM hosts
-    ansible.builtin.file:
-      path: /etc/xdg/autostart/mate-power-manager.desktop
-      state: absent
-    when: machine_role | default('vm') != 'vm'
-    tags: [mate, power]
+  # Deliberately no "restore on bare-metal" counterpart task here. This
+  # used to `file: state: absent` the same path on non-VM hosts, but that
+  # path IS the package's own shipped autostart file (confirmed via
+  # `dpkg -S`) — deleting it doesn't clean up a leftover override, it
+  # disables mate-power-manager's autostart entirely, contradicting the
+  # comment two tasks up ("genuinely needed on local-workstation"). Found
+  # 2026-09-18 chasing a duplicate battery icon. On bare-metal, just leave
+  # the package's own file alone — it already ships enabled by default.
+
+  # mate-power-manager shows its own battery status icon by default
+  # (icon-policy=present) whenever a battery exists — a second one
+  # alongside the battstat panel applet above. Keep mate-power-manager
+  # running (lid/suspend/brightness handling) but hide just its icon so
+  # battstat is the only battery indicator. Harmless to set on hosts
+  # where mate-power-manager never autostarts (VMs) — nothing reads it.
+  - name: Hide mate-power-manager's own status icon (battstat is the one indicator)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/05-power-manager-icon
+      content: |
+        [org/mate/power-manager]
+        icon-policy='never'
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, power, dconf]
 
   - name: Ensure dconf locks directory exists
     ansible.builtin.file:
