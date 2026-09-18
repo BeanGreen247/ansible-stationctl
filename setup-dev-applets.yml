@@ -342,6 +342,19 @@
   # mode this script exists to prevent. Retrying for up to 30s and actually
   # logging the outcome fixes both: the race gets a real window to resolve
   # itself, and a future failure is diagnosable instead of silent.
+  #
+  # An explicit, generous --timeout is mandatory here, not cosmetic: this
+  # Unlock call blocks on an actual gcr-prompter dialog the person has to
+  # respond to, which can legitimately take far longer than GDBus's default
+  # ~25s method-call timeout. Without it, a slow response would make gdbus
+  # itself time out, the retry loop would treat that as a failure, and it
+  # would fire Unlock again 3s later — stacking a second dialog on top of
+  # the one already open. Confirmed via GLib's own docs that --timeout=-1
+  # does NOT mean infinite here — it means "use the default (~25s)", the
+  # exact thing being fixed — so 300s (5 minutes, generous for a login
+  # prompt) is used instead. The 3s retry delay only ever applies to a
+  # fast-fail (service not registered yet), never to "the person hasn't
+  # finished typing yet".
   - name: Deploy keyring unlock-dialog trigger script
     ansible.builtin.copy:
       dest: /usr/local/bin/stationctl-keyring-unlock
@@ -351,7 +364,7 @@
         mkdir -p "$(dirname "$LOGFILE")"
 
         i=0
-        until gdbus call --session \
+        until gdbus call --session --timeout=300 \
           --dest org.freedesktop.secrets \
           --object-path /org/freedesktop/secrets \
           --method org.freedesktop.Secret.Service.Unlock \
