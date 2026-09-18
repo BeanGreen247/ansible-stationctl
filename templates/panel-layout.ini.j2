@@ -1,0 +1,99 @@
+[org/mate/panel/general]
+toplevel-id-list=['bottom']
+object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', {% if machine_role == 'bare-metal' %}'battery-status', {% endif %}'ram-status', 'sysmonitor', 'clock']
+
+[org/mate/panel/toplevels/bottom]
+orientation='bottom'
+size=32
+auto-hide=false
+expand=true
+
+[org/mate/panel/objects/menu-bar]
+object-type='menu-bar'
+toplevel-id='bottom'
+position=0
+panel-right-stick=false
+
+[org/mate/panel/objects/window-list]
+object-type='applet'
+applet-iid='WnckletFactory::WindowListApplet'
+toplevel-id='bottom'
+position=50
+panel-right-stick=false
+
+[org/mate/panel/objects/notification-area]
+object-type='applet'
+applet-iid='NotificationAreaAppletFactory::NotificationArea'
+toplevel-id='bottom'
+position=10
+panel-right-stick=true
+
+# StatusNotifierItem/AppIndicator host — Qt6 apps (dotfile-sync-tray,
+# infra-connections) need this since Qt6 dropped legacy XEmbed tray
+# support; the notification-area applet above only hosts XEmbed.
+[org/mate/panel/objects/indicators]
+object-type='applet'
+applet-iid='IndicatorAppletCompleteFactory::IndicatorAppletComplete'
+toplevel-id='bottom'
+position=9
+panel-right-stick=true
+
+{% if machine_role == 'bare-metal' %}
+# Battery/AC status — bare-metal only, no battery on a VM. Same Command-
+# applet pattern as ram-status below (a script's stdout as panel text) —
+# MATE's own battery tray icon doesn't give a persistent percentage +
+# time-remaining readout without hovering/clicking it.
+[org/mate/panel/objects/battery-status]
+object-type='applet'
+applet-iid='CommandAppletFactory::CommandApplet'
+toplevel-id='bottom'
+position=6
+panel-right-stick=true
+
+[org/mate/panel/objects/battery-status/prefs]
+command='/usr/local/bin/stationctl-battery-status.sh'
+interval=10
+show-icon=false
+width=34
+{% endif %}
+
+[org/mate/panel/objects/ram-status]
+object-type='applet'
+applet-iid='CommandAppletFactory::CommandApplet'
+toplevel-id='bottom'
+position=7
+panel-right-stick=true
+
+[org/mate/panel/objects/ram-status/prefs]
+command='/usr/local/bin/stationctl-ram-status.sh'
+interval=4
+show-icon=false
+width=22
+
+[org/mate/panel/objects/sysmonitor]
+object-type='applet'
+applet-iid='MultiLoadAppletFactory::MultiLoadApplet'
+toplevel-id='bottom'
+position=5
+panel-right-stick=true
+
+[org/mate/panel/objects/sysmonitor/prefs]
+view-cpuload=true
+view-memload=true
+view-netload=true
+view-swapload=true
+view-diskload=false
+view-loadavg=false
+speed=2000
+size=40
+
+[org/mate/panel/objects/clock]
+object-type='applet'
+applet-iid='ClockAppletFactory::ClockApplet'
+toplevel-id='bottom'
+position=0
+panel-right-stick=true
+
+[org/mate/panel/objects/clock/prefs]
+show-seconds=true
+show-date=true

@@ -187,90 +187,58 @@
       mode: "0755"
     tags: [mate, dconf, panel]
 
-  - name: Configure single bottom panel layout (best-effort default)
+  # Battery/AC status — bare-metal only (VMs have no battery). upower is
+  # what actually knows charge state + estimated time remaining; MATE's own
+  # battery tray icon has that info but only on hover/click, not as a
+  # persistent panel readout, hence the same Command-applet script pattern
+  # as RAM status above.
+  - name: Ensure upower is installed (bare-metal only)
+    ansible.builtin.apt:
+      name: upower
+      state: present
+    when: machine_role == 'bare-metal'
+    tags: [mate, power, packages]
+
+  - name: Deploy battery/AC status script for the panel Command applet (bare-metal only)
     ansible.builtin.copy:
-      dest: /etc/dconf/db/local.d/01-panel-layout
+      dest: /usr/local/bin/stationctl-battery-status.sh
       content: |
-        [org/mate/panel/general]
-        toplevel-id-list=['bottom']
-        object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor', 'clock']
+        #!/bin/sh
+        # No battery present (desktop/VM slipped past machine_role somehow) —
+        # fail quietly rather than showing a broken panel entry.
+        dev=$(upower -e 2>/dev/null | grep -m1 'battery_BAT')
+        if [ -z "$dev" ]; then
+          printf "No battery"
+          exit 0
+        fi
 
-        [org/mate/panel/toplevels/bottom]
-        orientation='bottom'
-        size=32
-        auto-hide=false
-        expand=true
+        info=$(upower -i "$dev")
+        pct=$(printf '%s\n' "$info" | awk -F: '/percentage/ { gsub(/[ %]/, "", $2); print $2; exit }')
+        state=$(printf '%s\n' "$info" | awk -F: '/^[[:space:]]*state/ { gsub(/^[ \t]+/, "", $2); print $2; exit }')
+        time=$(printf '%s\n' "$info" | awk -F: '/time to (empty|full)/ { sub(/^[ \t]+/, "", $2); print $2; exit }')
 
-        [org/mate/panel/objects/menu-bar]
-        object-type='menu-bar'
-        toplevel-id='bottom'
-        position=0
-        panel-right-stick=false
+        case "$state" in
+          charging)      label="AC" ;;
+          fully-charged) label="AC" ;;
+          discharging)   label="BAT" ;;
+          *)             label="$state" ;;
+        esac
 
-        [org/mate/panel/objects/window-list]
-        object-type='applet'
-        applet-iid='WnckletFactory::WindowListApplet'
-        toplevel-id='bottom'
-        position=50
-        panel-right-stick=false
+        if [ -n "$time" ]; then
+          printf "%s: %s%% (%s)" "$label" "$pct" "$time"
+        else
+          printf "%s: %s%%" "$label" "$pct"
+        fi
+      owner: root
+      group: root
+      mode: "0755"
+    when: machine_role == 'bare-metal'
+    tags: [mate, dconf, panel, power]
 
-        [org/mate/panel/objects/notification-area]
-        object-type='applet'
-        applet-iid='NotificationAreaAppletFactory::NotificationArea'
-        toplevel-id='bottom'
-        position=10
-        panel-right-stick=true
-
-        # StatusNotifierItem/AppIndicator host — Qt6 apps (dotfile-sync-tray,
-        # infra-connections) need this since Qt6 dropped legacy XEmbed tray
-        # support; the notification-area applet above only hosts XEmbed.
-        [org/mate/panel/objects/indicators]
-        object-type='applet'
-        applet-iid='IndicatorAppletCompleteFactory::IndicatorAppletComplete'
-        toplevel-id='bottom'
-        position=9
-        panel-right-stick=true
-
-        [org/mate/panel/objects/ram-status]
-        object-type='applet'
-        applet-iid='CommandAppletFactory::CommandApplet'
-        toplevel-id='bottom'
-        position=6
-        panel-right-stick=true
-
-        [org/mate/panel/objects/ram-status/prefs]
-        command='/usr/local/bin/stationctl-ram-status.sh'
-        interval=4
-        show-icon=false
-        width=22
-
-        [org/mate/panel/objects/sysmonitor]
-        object-type='applet'
-        applet-iid='MultiLoadAppletFactory::MultiLoadApplet'
-        toplevel-id='bottom'
-        position=5
-        panel-right-stick=true
-
-        [org/mate/panel/objects/sysmonitor/prefs]
-        view-cpuload=true
-        view-memload=true
-        view-netload=true
-        view-swapload=true
-        view-diskload=false
-        view-loadavg=false
-        speed=2000
-        size=40
-
-        [org/mate/panel/objects/clock]
-        object-type='applet'
-        applet-iid='ClockAppletFactory::ClockApplet'
-        toplevel-id='bottom'
-        position=0
-        panel-right-stick=true
-
-        [org/mate/panel/objects/clock/prefs]
-        show-seconds=true
-        show-date=true
+  - name: Configure single bottom panel layout (best-effort default)
+    ansible.builtin.template:
+      src: templates/panel-layout.ini.j2
+      dest: /etc/dconf/db/local.d/01-panel-layout
       owner: root
       group: root
       mode: "0644"
