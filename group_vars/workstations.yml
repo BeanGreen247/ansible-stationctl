@@ -150,6 +150,18 @@ workstation_sound_packages:
     - pulseaudio-utils
     - pavucontrol
 
+# Power management — bare-metal only, same pattern as GPU/sound/bluetooth
+# above. mate-power-manager already came along implicitly as a
+# mate-desktop-environment-core dependency, but it's listed explicitly
+# here now instead of relying on that transitively — matches how every
+# other package this repo cares about is tracked. upower is what it (and
+# the battstat panel applet) actually reads charge state from.
+workstation_power_packages:
+  vm: []
+  bare-metal:
+    - mate-power-manager
+    - upower
+
 # Bluetooth stack — bare-metal only. A VM has no real Bluetooth radio to
 # drive (Proxmox doesn't pass one through), so "vm" stays empty, same
 # pattern as GPU/sound above.

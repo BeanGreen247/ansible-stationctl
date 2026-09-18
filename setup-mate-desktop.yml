@@ -197,14 +197,9 @@
       state: absent
     tags: [mate, power, cleanup]
 
-  # battstat (below) reads real charge state via upower — bare-metal only,
-  # no battery on a VM.
-  - name: Ensure upower is installed (bare-metal only)
-    ansible.builtin.apt:
-      name: upower
-      state: present
-    when: machine_role == 'bare-metal'
-    tags: [mate, power, packages]
+  # upower (battstat's charge-state source below) is installed via
+  # workstation_power_packages in setup-base-debian.yml, alongside
+  # mate-power-manager.
 
   - name: Configure single bottom panel layout (best-effort default)
     ansible.builtin.template:
