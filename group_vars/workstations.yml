@@ -372,6 +372,9 @@ sysadmin_cli_packages:
   # git extras
   - git-lfs
   - tig
+  - git-delta   # better git diff/blame pager (syntax-highlighted, side-by-side)
+  - lazygit     # TUI git client
+  - pre-commit  # git hook framework, pairs with shellcheck/ansible-lint
   # shell / editors
   - nano
   - tmux
@@ -389,6 +392,8 @@ sysadmin_cli_packages:
   - ncdu
   # archives
   - jq
+  - yq          # YAML analog to jq — Debian's is the Python/jq-wrapper flavor,
+                # not mikefarah's Go yq; similar idea, slightly different syntax
   - p7zip-full
   - unzip
   - unrar-free  # real "unrar" needs Debian's non-free component enabled — skip that for one package
@@ -423,6 +428,8 @@ sysadmin_cli_packages:
   - lshw
   - hwinfo
   - inxi
+  - needrestart  # flags services needing a restart after a library upgrade
+  - lynis        # security auditing
   # python extras
   - python3-dev
   - pipx
@@ -432,6 +439,12 @@ sysadmin_cli_packages:
   - pv
   - moreutils
   - parallel
+  - direnv      # per-project env vars from .envrc
+  - just        # modern make-alternative command runner
+  - hyperfine   # CLI benchmarking
+  - procs       # modern ps replacement
+  - age         # modern file encryption, pairs with sops-style secrets workflows
+  - glow        # render markdown in the terminal
   - entr
   - libnotify-bin
 

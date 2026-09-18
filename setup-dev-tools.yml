@@ -244,12 +244,89 @@
       state: present
     tags: [dev, packages, armbian]
 
+  # mise (jdx/mise) — polyglot version manager (Python/Node/Ruby/Go/etc).
+  # bean already uses this personally (found in their own ~/.local/bin and
+  # .bashrc from before stationctl existed) — this makes it fleet-standard
+  # instead of a one-off. Official apt repo, same signed-by pattern as
+  # NodeSource/VS Code/.NET above.
+  - name: Add mise apt signing key
+    ansible.builtin.get_url:
+      url: https://mise.jdx.dev/gpg-key.pub
+      dest: /etc/apt/keyrings/mise.gpg
+      mode: "0644"
+    tags: [dev, mise]
+
+  - name: Add mise apt repository
+    ansible.builtin.apt_repository:
+      repo: "deb [signed-by=/etc/apt/keyrings/mise.gpg arch=amd64] https://mise.jdx.dev/deb stable main"
+      filename: mise
+      state: present
+      update_cache: true
+    tags: [dev, mise]
+
+  # Trivy — container/IaC vulnerability scanner (already referenced as an
+  # apt-repo tool in the user's own kubuntu-setup reference project).
+  # Official apt repo, published per Debian codename (confirmed "trixie" is
+  # covered, not just Ubuntu suites).
+  - name: Add Trivy apt signing key
+    ansible.builtin.get_url:
+      url: https://aquasecurity.github.io/trivy-repo/deb/public.key
+      dest: /etc/apt/keyrings/trivy.gpg
+      mode: "0644"
+    tags: [dev, trivy]
+
+  - name: Add Trivy apt repository
+    ansible.builtin.apt_repository:
+      repo: "deb [signed-by=/etc/apt/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb {{ ansible_distribution_release }} main"
+      filename: trivy
+      state: present
+      update_cache: true
+    tags: [dev, trivy]
+
+  - name: Install mise and Trivy
+    ansible.builtin.apt:
+      name:
+        - mise
+        - trivy
+      state: present
+    tags: [dev, mise, trivy]
+
   - name: Install sysadmin/dev CLI toolkit (curated from kubuntu-setup)
     ansible.builtin.apt:
       name: "{{ sysadmin_cli_packages }}"
       state: present
     when: sysadmin_cli_packages | default([]) | length > 0
     tags: [dev, packages, cli-tools]
+
+  # dive — inspect Docker image layers. Ships a real .deb release asset
+  # (unlike lazydocker below), so installed the same way as .NET/VS Code's
+  # own .deb-based installs: download + ansible.builtin.apt deb:. Pinned to
+  # a specific version rather than "latest" for reproducibility — bump
+  # dive_version by hand when a newer release is wanted.
+  - name: Download dive .deb package
+    ansible.builtin.get_url:
+      url: "https://github.com/wagoodman/dive/releases/download/v{{ dive_version | default('0.13.1') }}/dive_{{ dive_version | default('0.13.1') }}_linux_amd64.deb"
+      dest: "/tmp/dive_{{ dive_version | default('0.13.1') }}_linux_amd64.deb"
+      mode: "0644"
+    tags: [dev, dive]
+
+  - name: Install dive
+    ansible.builtin.apt:
+      deb: "/tmp/dive_{{ dive_version | default('0.13.1') }}_linux_amd64.deb"
+    tags: [dev, dive]
+
+  # lazydocker — no apt repo or .deb release, only tarballs. Pinned version,
+  # same reproducibility rationale as dive above.
+  - name: Download lazydocker tarball
+    ansible.builtin.unarchive:
+      src: "https://github.com/jesseduffield/lazydocker/releases/download/v{{ lazydocker_version | default('0.25.2') }}/lazydocker_{{ lazydocker_version | default('0.25.2') }}_Linux_x86_64.tar.gz"
+      dest: /usr/local/bin
+      remote_src: true
+      exclude:
+        - LICENSE
+        - README.md
+      mode: "0755"
+    tags: [dev, lazydocker]
 
   # Debian ships these under their historical names to avoid clashing with
   # older unrelated packages already using "bat"/"fd" — same fix
