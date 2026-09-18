@@ -298,6 +298,35 @@
     when: sysadmin_cli_packages | default([]) | length > 0
     tags: [dev, packages, cli-tools]
 
+  # python3-argcomplete (a real dependency of ansible-core/yq/pipx, not
+  # something to remove) ships a global bash-completion hook at
+  # /etc/bash_completion.d/global-python-argcomplete that registers itself
+  # as the DEFAULT completion handler (`complete -D`) for every command —
+  # not just argparse-based Python scripts. That silently breaks tab
+  # completion for everything else on the system that relies on
+  # bash-completion's own dynamic per-command loader (confirmed: even
+  # stock `git`/`systemctl` completion stopped working, not just the tools
+  # added today) — found 2026-09-18 while checking why none of today's new
+  # tools would tab-complete. Neutralize the global hook, not the package;
+  # argcomplete's actual per-command completion (e.g. for ansible-playbook)
+  # is unaffected since that's registered separately, per-command, by
+  # whatever explicitly opts into it.
+  - name: Disable python3-argcomplete's global bash-completion hook
+    ansible.builtin.copy:
+      dest: /etc/bash_completion.d/global-python-argcomplete
+      content: |
+        # Disabled by ansible-stationctl (setup-dev-tools.yml) — this file's
+        # original content registered python-argcomplete as the DEFAULT
+        # bash-completion handler for every command, which broke normal
+        # tab-completion (git, systemctl, and any newly-installed CLI tool)
+        # system-wide. argcomplete's own per-command completion (e.g.
+        # ansible-playbook) is unaffected — that's registered separately,
+        # not through this global hook.
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [dev, packages, cli-tools, bash-completion]
+
   # dive — inspect Docker image layers. Ships a real .deb release asset
   # (unlike lazydocker below), so installed the same way as .NET/VS Code's
   # own .deb-based installs: download + ansible.builtin.apt deb:. Pinned to
