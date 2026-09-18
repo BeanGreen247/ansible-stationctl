@@ -399,6 +399,25 @@
     when: sysadmin_cli_packages | default([]) | length > 0
     tags: [dev, packages, cli-tools]
 
+  # lynis/needrestart install to /usr/sbin, which isn't on a normal user's
+  # $PATH (only root/sudo's secure_path includes it) — confirmed 2026-09-18:
+  # `sudo lynis` already worked fine, but a bare `lynis` from a regular
+  # interactive shell was "command not found", not a completion issue.
+  # Symlinked the same way as bat/fd above so they're just typeable —
+  # running without sudo still works for both (reduced-capability audit by
+  # design for lynis; needrestart's own docs note the same), sudo unlocks
+  # their full functionality.
+  - name: Symlink lynis/needrestart onto a normal user's PATH
+    ansible.builtin.file:
+      src: "{{ item.src }}"
+      dest: "{{ item.dest }}"
+      state: link
+    loop:
+      - { src: /usr/sbin/lynis, dest: /usr/local/bin/lynis }
+      - { src: /usr/sbin/needrestart, dest: /usr/local/bin/needrestart }
+    when: sysadmin_cli_packages | default([]) | length > 0
+    tags: [dev, packages, cli-tools]
+
   # --ignore-installed: some of these (fastapi -> typing-extensions, etc.)
   # need a newer version than what an apt package (python3-dev among others)
   # already dropped into dist-packages. Those apt-owned copies have no pip
