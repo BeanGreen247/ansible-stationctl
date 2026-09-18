@@ -319,12 +319,40 @@
         # original content registered python-argcomplete as the DEFAULT
         # bash-completion handler for every command, which broke normal
         # tab-completion (git, systemctl, and any newly-installed CLI tool)
-        # system-wide. argcomplete's own per-command completion (e.g.
-        # ansible-playbook) is unaffected — that's registered separately,
-        # not through this global hook.
+        # system-wide. The ansible CLI suite's own completion (which DID rely
+        # on this global hook, and so broke along with everything else) is
+        # restored properly below instead, via explicit per-command
+        # registration — see "Generate static bash-completion registrations
+        # for the ansible CLI suite".
       owner: root
       group: root
       mode: "0644"
+    tags: [dev, packages, cli-tools, bash-completion]
+
+  # Python/argparse-based CLIs (the ansible suite here) don't ship static
+  # /usr/share/bash-completion/completions/<cmd> files like git/mise/trivy
+  # do — they rely entirely on python-argcomplete, either via the global
+  # hook just disabled above (which broke everything else) or explicit
+  # per-command registration (the officially-supported, non-global way —
+  # this is literally what Ansible's own docs recommend:
+  # `eval "$(register-python-argcomplete ansible-playbook)"`). Generated
+  # once at provision time rather than re-run at every shell startup —
+  # running `register-python-argcomplete` (spawns a Python interpreter) ~10
+  # times on every new terminal would be real, noticeable latency; a static
+  # file only goes stale if ansible-core's own argument parser changes
+  # between upgrades, an acceptable trade-off. Delete the file and re-run
+  # this task if that ever needs a refresh.
+  - name: Generate static bash-completion registrations for the ansible CLI suite
+    ansible.builtin.shell: |
+      set -e
+      for cmd in ansible ansible-config ansible-console ansible-doc ansible-galaxy \
+                 ansible-inventory ansible-playbook ansible-pull ansible-test ansible-vault; do
+        register-python-argcomplete --shell bash "$cmd"
+        echo
+      done > /etc/bash_completion.d/ansible-argcomplete
+    args:
+      executable: /bin/bash
+      creates: /etc/bash_completion.d/ansible-argcomplete
     tags: [dev, packages, cli-tools, bash-completion]
 
   # dive — inspect Docker image layers. Ships a real .deb release asset
