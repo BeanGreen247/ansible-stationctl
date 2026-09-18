@@ -117,9 +117,28 @@
         [Seat:*]
         user-session=mate
         greeter-session=lightdm-gtk-greeter
+        greeter-hide-users=false
+        greeter-show-manual-login=false
       owner: root
       group: root
       mode: "0644"
+    tags: [mate, lightdm]
+
+  # AccountsService is installed, so it's authoritative for the greeter's
+  # user list — /etc/lightdm/users.conf's hidden-users is silently ignored
+  # whenever AccountsService is present, so hiding ansibleuser (the
+  # automation account, not a human who logs in at the console) has to go
+  # through AccountsService itself instead. accounts-daemon watches this
+  # directory and picks the flag up without a restart.
+  - name: Hide the ansibleuser automation account from the LightDM greeter
+    ansible.builtin.copy:
+      dest: /var/lib/AccountsService/users/ansibleuser
+      content: |
+        [User]
+        SystemAccount=true
+      owner: root
+      group: root
+      mode: "0600"
     tags: [mate, lightdm]
 
   # A VM endpoint (remote-workstation) is reached exclusively via TigerVNC
@@ -318,6 +337,26 @@
         with --tags wallpaper to apply it. Current background left as-is.
     when: _wallpaper_matches | length == 0
     tags: [mate, wallpaper]
+
+  # lightdm-gtk-greeter's shipped default (01_debian.conf) points its
+  # background at desktop-base's login-background.svg, which no longer
+  # exists now that desktop-base is purged below — the greeter was falling
+  # back to a blank/undefined background. Reuse this host's own desktop
+  # wallpaper (deployed above) so the login screen matches the desktop, and
+  # match the same Arc-Dark/Papirus-Dark theme too; fall back to a plain
+  # dark color on a host with no wallpaper image yet.
+  - name: Configure LightDM GTK greeter (dark theme, reuse desktop wallpaper)
+    ansible.builtin.copy:
+      dest: /etc/lightdm/lightdm-gtk-greeter.conf
+      content: |
+        [greeter]
+        theme-name={{ mate_gtk_theme }}
+        icon-theme-name={{ mate_icon_theme }}
+        background={{ '/usr/share/backgrounds/stationctl/' + (query('fileglob', playbook_dir + '/files/wallpapers/' + inventory_hostname + '.*')[0] | basename) if query('fileglob', playbook_dir + '/files/wallpapers/' + inventory_hostname + '.*') | length > 0 else '#1b1b1b' }}
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [mate, lightdm, wallpaper]
 
   # desktop-base ships ~10 unrelated bundled theme sets (grub splash images,
   # plymouth boot themes, lockscreen/login backgrounds, and the "swirl"
