@@ -24,6 +24,43 @@ verdict, why.
 | Disable `mate-power-manager` autostart on VMs, keep on real hardware | remote-workstation (disabled), local-workstation (kept) | kept | Same shape as the CPU-governor split: gated on `machine_role`, not removed unconditionally. Polls upower for battery/AC status the VM doesn't have; genuinely needed on the ThinkPad. |
 | Tune earlyoom `--avoid`/`--prefer` process patterns instead of stock config | both | kept, unmeasured | Stock earlyoom config has no opinion about which process is worth saving on this specific session shape (TigerVNC + MATE, not a generic desktop) — an untuned backstop can kill the very session you'd use to recover. `--avoid` protects Xorg/Xtigervnc/sshd/dbus/mate-session/lightdm; `--prefer` targets browser/docker/node/java as the likely actual runaway. Not measured against a real OOM event yet — that's inherently hard to test safely, so this is a reasoned default, not a benchmarked one. |
 | Set zram `STREAMS` to match vCPU count | — | rejected, not implemented | Modern kernels (≥4.7, well before Debian 13's kernel) removed the `max_comp_streams` tunable entirely — zram automatically uses one compression stream per online CPU with no config surface for it, and zram-tools' `/etc/default/zramswap` has no `STREAMS` key to begin with. Setting it would be a no-op line, not a real optimization. Don't re-propose this without first confirming the target kernel actually exposes the knob. |
+| VS Code Python language server: Pylance → Jedi | remote-workstation | kept, measured | See [VS Code editor tuning](#vs-code-editor-tuning) below — 455MB → 56MB on the same repo, ~8x reduction on the single biggest per-window memory line item. |
+| VS Code AI/Copilot lockdown (`extensions.allowed`, `chat.disableAIFeatures`) | both (synced via account, not this repo) | kept, measured | See [VS Code editor tuning](#vs-code-editor-tuning) below — this VS Code build ships a bundled Copilot binary that spawns unprompted on a stock profile (~238MB); blocked entirely on the tuned profile. |
+
+## VS Code editor tuning
+
+Unlike everything else in this file, most of this tuning does **not** live in
+this repo's playbooks — it lives in `settings.json`, synced across every
+machine via the end user's own GitHub-account Settings Sync. `setup-dev-tools.yml`
+only owns the two things Settings Sync doesn't cover: `argv.json`'s
+`password-store: basic` (keychain workaround) and one-time removal of VS
+Code's built-in "Agents" profile (`~/.config/Code/User/profiles/builtin/agents`
++ its `globalStorage/storage.json` entry — confirmed on 2026-09-18 this
+doesn't get recreated once the Agents/Chat feature is disabled). Re-running
+the playbook must never fight the synced `settings.json` — see the comment
+block directly above the `Install dev tool packages` task in
+`setup-dev-tools.yml` if that constraint ever needs revisiting.
+
+**Measured, not estimated** (both runs against this very repo,
+`ansible-stationctl`, on remote-workstation):
+
+| | Stock/empty profile | Tuned profile |
+|---|---|---|
+| Copilot process | Spawns unprompted, ~238MB (this VS Code build bundles a native Copilot binary outside the normal extension system — `extensions.allowed` blocks the marketplace extension IDs but this binary isn't one; blocked instead by `chat.disableAIFeatures`) | Not present |
+| Python language server | Pylance, ~455MB fixed floor regardless of project size (confirmed against a near-empty 3.2MB test project too) | Jedi (bundled in `ms-python.python`, no install needed), ~56MB — ~8x smaller |
+| Telemetry / crash reporting | On | Off |
+| Terminal sessions | Persisted across restarts (extra ~118MB utility-host process just to hold a restored shell) | Not persisted |
+| File watcher scope | Default excludes only | Explicit excludes for `.git/objects`, `node_modules`, `dist`, `build`, `.venv`, `coverage`, `.cache`, `tmp` |
+| Workspace auto-scanning | npm/task/grunt/gulp/jake script detection on by default | All off |
+| Total window RSS on this repo | ~1.5–1.8GB (before Pylance even activates on a `.py` file — would climb further once it does) | ~1.4–1.8GB (Jedi already active, Copilot absent) — run-to-run variance here comes from VS Code's own extension-activation timing (JSON schema validation, Ansible/YAML language features), not from the tuning itself |
+
+The total-RSS row has real variance between runs (VS Code doesn't activate
+every extension in the same order every time), which is why it's a range
+rather than one number — the two rows above it (Copilot presence, Pylance vs.
+Jedi) are the clean, reproducible, apples-to-apples deltas and the actual
+reason the range is lower on the tuned side. Full config lives in the user's
+synced `settings.json` — see [`setup-dev-tools.yml`](../setup-dev-tools.yml)'s
+VS Code section comments for what this repo does vs. doesn't own.
 
 ## Open items (not yet decided/measured)
 
