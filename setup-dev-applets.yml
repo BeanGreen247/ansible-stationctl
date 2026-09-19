@@ -107,6 +107,12 @@
     ansible.builtin.command: id -u {{ vm_enduser_name }}
     register: _enduser_uid
     changed_when: false
+    # Read-only lookup with no side effects — always run for real even
+    # under --check, otherwise it's skipped (command/shell don't support
+    # check mode by default) and the ayatana task below fails trying to
+    # build XDG_RUNTIME_DIR from an empty _enduser_uid.stdout (found via
+    # the idempotency-check wrapper, 2026-09-19).
+    check_mode: false
     when: vm_enduser_name | default('') | length > 0
     tags: [applets]
 

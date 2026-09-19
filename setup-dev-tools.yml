@@ -81,6 +81,11 @@
   - name: Update APT cache after adding Microsoft's repo
     ansible.builtin.apt:
       update_cache: true
+    # A deliberate forced refresh, not itself a config-drift signal —
+    # without this, the apt module always reports changed=true here since
+    # it has no package name to compare against (found via the
+    # idempotency-check wrapper, 2026-09-19).
+    changed_when: false
     tags: [dev, dotnet]
 
   # VS Code's own repo is signed with Microsoft's classic release key
@@ -93,7 +98,6 @@
       url: https://packages.microsoft.com/keys/microsoft.asc
       dest: /etc/apt/keyrings/microsoft.gpg
       mode: "0644"
-      force: true
     tags: [dev, vscode]
 
   - name: Add Microsoft VS Code apt repository
@@ -425,6 +429,19 @@
   # first ("no RECORD file was found" / "uninstall-no-record-file"). Ignoring
   # the already-installed version makes pip install its own copy alongside
   # it instead of trying to remove the dpkg-owned one.
+  #
+  # KNOWN NON-IDEMPOTENT (found via the idempotency-check wrapper,
+  # 2026-09-19): --ignore-installed structurally can't be idempotent — it
+  # tells pip to skip its own "already satisfied" check, so every package
+  # here gets reinstalled on every run regardless of whether anything
+  # actually changed. Confirmed live on both hosts that
+  # python3-typing-extensions really is dpkg-owned (pulled in by
+  # python3-dev), so the underlying reason for this flag is real, not
+  # legacy — removing it outright would likely reintroduce the original
+  # crash. A real fix needs either "adopting" typing-extensions into pip's
+  # ownership once (one-off pip install of just that package) or excluding
+  # it from the apt-owned set some other way — not attempted here; see
+  # docs/TODO.md.
   - name: Install pip tooling for the custom scripts in this workstation's home dir
     ansible.builtin.pip:
       name: "{{ workstation_pip_packages }}"

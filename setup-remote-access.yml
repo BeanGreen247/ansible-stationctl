@@ -207,6 +207,12 @@
       url: https://tailscale.com/install.sh
       dest: /tmp/tailscale-install.sh
       mode: "0755"
+    # /tmp is tmpfs (wiped every reboot) and the actual install stays
+    # idempotent via the next task's `creates:` guard — this download
+    # reporting changed=true isn't meaningful config-drift, just get_url
+    # not getting stable caching headers from tailscale.com (found via
+    # the idempotency-check wrapper, 2026-09-19).
+    changed_when: false
     tags: [remote-access, tailscale]
 
   - name: Run Tailscale install script (idempotent, no-op if already installed)

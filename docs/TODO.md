@@ -42,6 +42,40 @@ and the full non-bootstrap playbook set has now run against it end to end).
   as `bean` (blocked from this session by a write-action permission rule)
   — either allow that Bash pattern, or run `tigervncserver :1` manually
   from the console/an SSH session and read the real stderr.
+  - **2026-09-19**: `scripts/run_playbook.py`'s idempotency postflight now
+    surfaces this concretely — `setup-remote-access.yml`'s "Enable and
+    start the packaged VNC server" task reports `changed=true` on every
+    single run, because the service genuinely never reaches a running
+    state (`systemctl status` shows `Active: inactive (dead)` seconds
+    after each start attempt, main process exits 0 but the wrapped
+    `tigervncsession` process itself exits status=1). This is the same
+    pre-existing bug above, not a new one — left the idempotency lock
+    ack'd rather than silenced (`changed_when: false` would hide a real
+    broken state), so it'll keep flagging on every playbook run through
+    the wrapper until the underlying VNC bug above is actually fixed.
+
+- **`ayatana-indicator-application.service` (local-workstation) loses the
+  StatusNotifierWatcher race to `mate-indicator-applet-complete` — found
+  2026-09-19 via the idempotency wrapper on `setup-dev-applets.yml`.**
+  Live evidence: `mate-indicator-applet-complete` (part of the real
+  logged-in MATE session, `dbus-send --session ListNames` confirms it)
+  already owns `org.kde.StatusNotifierWatcher`; the ansible-started
+  `ayatana-indicator-application.service` then fails to also claim that
+  name (`journalctl --user`: "Unable to get watcher name... Name Lost")
+  and lands `Active: inactive (dead)` every time, so the task's `systemd:
+  state=started` reports `changed=true` on every single run — permanent,
+  not transient. **Not yet investigated further or fixed** — the task's
+  own comment in `setup-dev-applets.yml` (around "Look up end-user's
+  uid") justifies this service as needed for the Qt6 tray apps
+  (dotfile-sync-tray, infra-connections) to have a watcher to register
+  with, but live evidence now shows `mate-indicator-applet-complete`
+  already fills that role and the tray apps are already working through
+  it — so `ayatana-indicator-application.service` may simply be redundant
+  now rather than needed. Didn't touch this mid-sweep since it's a live,
+  currently-working tray setup people rely on daily; left the
+  idempotency lock ack'd, not silenced. Next step: check whether
+  disabling this service (instead of enabling it) still leaves the tray
+  apps working, on a real session, before changing the playbook.
 
 ## remote-workstation (VM, kenny) — carried over, still open
 
