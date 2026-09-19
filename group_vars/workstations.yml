@@ -232,6 +232,7 @@ dev_packages:
   - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
   - idle          # provides idlelib, used by some homegrown editor scripts
   - keepassxc
+  - filezilla     # GUI FTP/SFTP client
   # Required by both VS Code markdown extensions' PDF/DOCX export path
   # (shd101wyy.markdown-preview-enhanced, yzhang.markdown-all-in-one) — found
   # missing 2026-09-18 during a full extension-dependency audit. Everything
