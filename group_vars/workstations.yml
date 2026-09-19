@@ -198,9 +198,9 @@ mate_packages:
   - mate-polkit
   - dconf-cli
   - dbus-x11
-  - arc-theme          # placeholder dark theme for the "submarine" look — swap freely
-  - mate-applets       # for the panel's System Monitor (multiload: cpu/mem/net/swap) applet
-  - papirus-icon-theme # actively maintained upstream, pairs with Arc-Dark
+  - arc-theme           # placeholder dark theme for the "submarine" look — swap freely
+  - mate-applets        # for the panel's System Monitor (multiload: cpu/mem/net/swap) applet
+  - papirus-icon-theme  # actively maintained upstream, pairs with Arc-Dark
 
 mate_gtk_theme: "Arc-Dark"
 mate_marco_theme: "Arc-Dark"

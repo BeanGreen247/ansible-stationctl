@@ -1,0 +1,11 @@
+# "basic" catches real-risk classes (syntax/load failures, deprecated
+# modules, broken jinja, no-jinja-when, etc.) without demanding this
+# already-working repo be rewritten to the opinionated "production"
+# style profile (handler-vs-task preferences, changed_when everywhere,
+# etc.) in one unrelated pass. Tighten later as a deliberate cleanup.
+profile: basic
+
+exclude_paths:
+  - collections/
+  - .ansible/
+  - .github/

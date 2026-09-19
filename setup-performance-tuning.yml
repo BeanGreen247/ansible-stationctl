@@ -25,6 +25,12 @@
 # Target hosts
 #   ansible-playbook setup-performance-tuning.yml --limit workstations
 #
+# Real hardware this is tested against — local-workstation is a real
+# Lenovo ThinkPad E490 (Intel i5-8265U 4c/8t, 40GB DDR4, Toshiba NVMe
+# 256GB) rather than a VM, so its zram/swap tier lands on the "generous
+# RAM" end of the tables above on real silicon, not an estimate. Full
+# hardware profile in docs/README.md's "Tested Hardware Platform" section.
+#
 # Credit: Thomas Mozdren
 ---
 - name: Apply performance tuning for the workstation resource budget
@@ -46,8 +52,8 @@
       - { max_mb: 999999, value: 60 }    # kernel default — proven stable, no thrashing
 
     zram_algo_tiers:
-      - { max_vcpus: 1, algo: "lz4" }    # single vCPU: favor speed over ratio
-      - { max_vcpus: 999, algo: "zstd" } # 2+ vCPUs: zstd's better ratio is worth the cost
+      - { max_vcpus: 1, algo: "lz4" }     # single vCPU: favor speed over ratio
+      - { max_vcpus: 999, algo: "zstd" }  # 2+ vCPUs: zstd's better ratio is worth the cost
 
   tasks:
 

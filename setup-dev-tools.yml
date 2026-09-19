@@ -36,7 +36,7 @@
       mode: "0644"
     tags: [dev, nodejs]
 
-  - name: Add NodeSource apt repository (Node {{ nodejs_major_version | default(22) }}.x)
+  - name: Add NodeSource apt repository for Node version {{ nodejs_major_version | default(22) ~ '.x' }}
     ansible.builtin.apt_repository:
       repo: "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_{{ nodejs_major_version | default(22) }}.x nodistro main"
       filename: nodesource
