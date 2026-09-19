@@ -17,6 +17,16 @@ jobs:
       - name: Install ansible, ansible-lint, yamllint
         run: pip install --user ansible ansible-lint yamllint
 
+      - name: Create placeholder vault password file
+        # ansible.cfg points at ~/.vault_pass.txt (gitignored, real value
+        # only exists on the maintainer's machine). Nothing vaulted is
+        # ever actually decrypted here — group_vars/all/main.yml and
+        # host_vars/*/vault.yml are gitignored too, so a fresh CI
+        # checkout never has real vaulted content to decrypt. Ansible
+        # still refuses to run at all if the configured vault password
+        # file is simply missing, so this just needs to exist.
+        run: echo "unused-in-ci" > ~/.vault_pass.txt
+
       - name: Run playbook tests (syntax-check + lint)
         run: |
           export PATH="$HOME/.local/bin:$PATH"
