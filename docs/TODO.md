@@ -68,9 +68,39 @@ and the full non-bootstrap playbook set has now run against it end to end).
 
 ## General / repo-level
 
-- **No CI yet** — playbooks are only validated by actually running them
-  against the two real hosts, not via `--syntax-check`/`ansible-lint` in
-  any automated pipeline.
+- **2026-09-19: CI added** — `.github/workflows/ci.yml` runs
+  `scripts/test_playbooks.sh` (yamllint + `ansible-playbook --syntax-check`
+  for every top-level playbook + `ansible-lint --profile basic`) on every
+  push/PR. This catches the class of bug that would blow up immediately on
+  execution (bad YAML, undefined vars, broken Jinja, deprecated module
+  args) — it can't catch "logically wrong for this specific hardware"
+  bugs, since these playbooks depend on real host facts (`machine_role`,
+  disk layout, etc.) that don't exist in a lint-only pass. Real execution
+  correctness still comes from `scripts/run_playbook.py`'s idempotency
+  postflight against the two real hosts. `ansible-lint` is pinned to the
+  `basic` profile (not `production`) on purpose — the stricter profile
+  surfaced ~40 pre-existing style findings (no-handler, no-changed-when,
+  document-start, etc.) across the repo that are real but out of scope for
+  this pass; tightening the profile is a deliberate future cleanup, not
+  bundled in here.
+  - **Follow-up, same as below**: port this same lint/syntax-check CI setup
+    to `ansible-proxmox` too — noted in that repo's memory file, not yet
+    built there.
+- **2026-09-19: added `scripts/run_playbook.py` + `scripts/check_ip_drift.py`**
+  — IP-drift preflight (inventory vs. live Tailscale lookup, cross-checked
+  against ARP when a MAC is known) and an idempotency postflight (rerun
+  with `--check --diff`, halt if changed>0) wrapped around every routine
+  playbook run. See `docs/QUICKSTART.md`'s new section for usage. Verified
+  end-to-end against a synthetic drift/non-idempotent case; **not yet
+  exercised on a real drift event** (both hosts currently resolve clean).
+  Follow-ups:
+  - Add `mac_address` to `host_vars/*/main.yml` for both hosts (need to
+    pull each host's real MAC via `ip link`/`cat /sys/class/net/*/address`
+    over SSH) to enable the ARP cross-check — currently skipped with a
+    note on every run.
+  - Port the same pattern to `ansible-proxmox` — see that repo's memory
+    note; the navidrome IP-drift incident that prompted this lives there,
+    not here.
 - **`docs/README.md` reconciliation** — lower priority, purely
   cosmetic/accuracy; `QUICKSTART.md` is the accurate day-to-day reference
   in the meantime. The README's "Pending Tasks" swap/disk entry for

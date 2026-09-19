@@ -35,6 +35,58 @@ Only use `ansible-playbook site.yml -u root --ask-pass --limit <host>` (or
 
 ---
 
+## Use `scripts/run_playbook.py`, not bare `ansible-playbook`, for routine runs
+
+For any already-bootstrapped host, run playbooks through the wrapper instead
+of calling `ansible-playbook` directly:
+
+```bash
+scripts/run_playbook.py setup-base-debian.yml --limit workstations
+```
+
+It does two things bare `ansible-playbook` doesn't, both **halt loudly with
+explicit instructions** rather than silently warning or silently fixing:
+
+1. **IP-drift preflight** (`scripts/check_ip_drift.py`) — cross-checks every
+   inventory host's static `ansible_host` against a live Tailscale lookup
+   (and, where `mac_address` is set in `host_vars/<host>/main.yml`, an ARP
+   cross-check) before anything runs. If the host's real Tailscale IP has
+   moved and `inventory/hosts.ini` hasn't caught up, it stops before any
+   playbook touches the network and tells you exactly what changed and what
+   to run next (`scripts/check_ip_drift.py --apply` once you've confirmed
+   the new IP is genuinely this host). This is what would have caught the
+   navidrome-style "IP moved, nobody updated the config" problem here.
+2. **Idempotency postflight** — after a real apply, it reruns the same
+   playbook with `--check --diff`. A clean second pass should show
+   `changed=0`; if it doesn't, the playbook isn't actually idempotent and
+   the wrapper writes a lock file, prints the diff, and refuses to let any
+   further playbook run through it until you either fix the task or
+   explicitly acknowledge it (`scripts/run_playbook.py --ack-idempotency
+   "reason"`).
+
+Run `scripts/run_playbook.py --status` any time to see active locks.
+`site.yml`'s bootstrap play (`-u root --ask-pass`) and manual `--check
+--diff` dry-runs still go through bare `ansible-playbook` — the wrapper
+assumes an already-bootstrapped host reachable via the normal inventory.
+
+---
+
+## Testing before you push
+
+`scripts/test_playbooks.sh` runs yamllint + `ansible-playbook
+--syntax-check` (every top-level playbook) + `ansible-lint --profile
+basic` — the class of failure catchable without a real host (bad YAML,
+undefined vars, broken Jinja, deprecated module args). It cannot validate
+host-specific logic (`machine_role` branches, disk layout assumptions,
+etc.) — that still needs a real run via `scripts/run_playbook.py`.
+`.github/workflows/ci.yml` runs the same script on every push/PR.
+
+```bash
+scripts/test_playbooks.sh
+```
+
+---
+
 ## Hard rule: never break access
 
 Any change touching SSH (`sshd_config`, `setup-base-debian.yml`,

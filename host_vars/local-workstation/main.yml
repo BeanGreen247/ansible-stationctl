@@ -1,6 +1,17 @@
 # host_vars/local-workstation/main.yml
 # Non-secret, host-specific overrides for the bare-metal ThinkPad E490.
+#
+# Real hardware (gathered live via lshw/dmidecode/lscpu/lsblk/lspci on
+# 2026-09-19, see docs/README.md's "Tested Hardware Platform" for the full
+# table): Lenovo ThinkPad E490 (20N9S19A00), Intel i5-8265U (4c/8t), 40GB
+# DDR4, Toshiba NVMe 256GB, Intel UHD 620, Realtek Gigabit + Intel AX200
+# Wi-Fi 6/Bluetooth. This is the only real bare-metal machine this repo's
+# bare-metal-only tasks are validated against.
 machine_role: "bare-metal"
+
+# Tailscale device name for this host (differs from the inventory alias) —
+# used by scripts/check_ip_drift.py to look up its live Tailscale IP.
+tailscale_hostname: "PeakPulse"
 
 # This laptop has one real, pre-existing account ("bean" — set up before
 # stationctl ever touched the box, already has sudo, already has its own
