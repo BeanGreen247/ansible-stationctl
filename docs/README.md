@@ -9,17 +9,18 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Repository Layout](#repository-layout)
-3. [Requirements](#requirements)
-4. [First-Time Setup](#first-time-setup)
-5. [Step-by-Step: Applying This Setup on a New VM or Bare-Metal Machine](#step-by-step-applying-this-setup-on-a-new-vm-or-bare-metal-machine)
-6. [Playbook Reference](#playbook-reference)
-7. [Configuration Reference](#configuration-reference)
-8. [Inventory](#inventory)
-9. [Day-to-Day Operations](#day-to-day-operations)
-10. [Vault — Managing Secrets](#vault--managing-secrets)
-11. [Known Limitations](#known-limitations)
-12. [Pending Tasks](#pending-tasks)
+2. [Tested Hardware Platform](#tested-hardware-platform)
+3. [Repository Layout](#repository-layout)
+4. [Requirements](#requirements)
+5. [First-Time Setup](#first-time-setup)
+6. [Step-by-Step: Applying This Setup on a New VM or Bare-Metal Machine](#step-by-step-applying-this-setup-on-a-new-vm-or-bare-metal-machine)
+7. [Playbook Reference](#playbook-reference)
+8. [Configuration Reference](#configuration-reference)
+9. [Inventory](#inventory)
+10. [Day-to-Day Operations](#day-to-day-operations)
+11. [Vault — Managing Secrets](#vault--managing-secrets)
+12. [Known Limitations](#known-limitations)
+13. [Pending Tasks](#pending-tasks)
 
 ---
 
@@ -35,6 +36,35 @@ The point: edit `group_vars/workstations.yml` or any playbook once, re-run `site
 VM *shell* creation (Proxmox API provisioning) is out of scope here — that's [`ansible-proxmox`](../ansible-proxmox)'s job. This repo picks up from a fresh Debian install, the same handoff point as `ansible-proxmox`'s own `setup-ansibleuser.yml` → `setup-debian-base.yml` chain.
 
 `ansible-proxmox-ssh-gui-tool` is a separate, standalone tool — not part of this repo.
+
+## Tested Hardware Platform
+
+`remote-workstation` is a Proxmox VM (virtual hardware, sized per
+`ansible-proxmox`'s `group_vars/all/vms.yml`). `local-workstation` is the
+one real bare-metal box this repo is validated against — profile below
+gathered live from the host itself (`lshw`, `dmidecode`, `lscpu`,
+`lsblk`, `lspci`) on 2026-09-19, not from memory or a spec sheet:
+
+| Component | Detail |
+|---|---|
+| Model | Lenovo ThinkPad E490 (20N9S19A00) |
+| CPU | Intel Core i5-8265U, 4 cores / 8 threads, up to 3.9GHz |
+| RAM | 40GB DDR4 (32GB + 8GB SODIMM, mixed 3200/2667 MT/s modules, both running at 2400 MT/s) |
+| Storage | Toshiba KXG60ZNV256G NVMe, 256GB (238.5GB usable: ~975MB EFI + 237GB ext4 root) |
+| GPU | Intel UHD Graphics 620 (integrated, WhiskeyLake-U GT2) |
+| Wired NIC | Realtek RTL8111/8168/8211/8411 Gigabit Ethernet |
+| Wi-Fi / Bluetooth | Intel Wi-Fi 6 AX200 (also provides Bluetooth) |
+| OS | Debian 13 (trixie), kernel 6.12.107+deb13-amd64 |
+
+Why this matters: `machine_role: bare-metal` branches in
+`setup-kernel-perf-tuning.yml`, `setup-performance-tuning.yml`, and the
+Bluetooth/GPU/sound package selection in `group_vars/workstations.yml`
+run on this real hardware, not a VM approximating it — GRUB cmdline
+changes, the NVMe drive-type map, and the swap/zram tier this box lands
+on (see `host_vars/local-workstation/main.yml`) are all validated against
+actual firmware and actual silicon. If you're adapting this repo to
+different real hardware, treat every bare-metal-only task as "tested on
+one specific laptop," not "tested on bare metal in general."
 
 ## Repository Layout
 

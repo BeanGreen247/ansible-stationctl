@@ -17,6 +17,13 @@
 #
 # Credit: tuning approach adapted from BeanGreen247/tuxthrottle and
 # BeanGreen247/kubuntu-setup.
+#
+# Real hardware this is tested against (see docs/README.md's "Tested
+# Hardware Platform" section for the full profile, gathered via lshw/
+# dmidecode/lscpu on the live host): local-workstation is a real Lenovo
+# ThinkPad E490 (Intel i5-8265U, 4c/8t) — the bare-metal machine_role path
+# through this playbook (GRUB cmdline, drive-type map, etc.) runs on real
+# firmware/hardware, not a VM guessing at what bare metal looks like.
 ---
 - name: Deeper kernel/scheduler/network/IO performance tuning
   hosts: workstations
