@@ -101,6 +101,10 @@ and the full non-bootstrap playbook set has now run against it end to end).
   - Port the same pattern to `ansible-proxmox` — see that repo's memory
     note; the navidrome IP-drift incident that prompted this lives there,
     not here.
+  - **Future feature, explicitly undecided**: whether to replace this
+    drift-detection-on-a-static-file approach with a live Tailscale-based
+    dynamic inventory in both repos instead. See
+    `docs/INVENTORY-CONSOLIDATION.md` — proposal only, not started.
 - **`docs/README.md` reconciliation** — lower priority, purely
   cosmetic/accuracy; `QUICKSTART.md` is the accurate day-to-day reference
   in the meantime. The README's "Pending Tasks" swap/disk entry for

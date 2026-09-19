@@ -205,3 +205,5 @@ Same pattern as `ansible-proxmox`: `~/.vault_pass.txt` (outside any repo, `chmod
 ## Pending Tasks
 
 See [`docs/TODO.md`](TODO.md) for the current list — it's updated per-session and is the accurate source now. (The `local-workstation` swap/disk policy decision that used to live here is resolved: confirmed 2026-09-18 via `lsblk -f`/`/proc/swaps` on the real ThinkPad disk that no legacy swap partition ever existed, so `setup-performance-tuning.yml`'s reclaim task correctly took its no-op path; root fs and swapfile+zram are intact.)
+
+See [`docs/INVENTORY-CONSOLIDATION.md`](INVENTORY-CONSOLIDATION.md) for an open (undecided) proposal to replace this repo's and `ansible-proxmox`'s static inventory files with a live Tailscale-based lookup.
