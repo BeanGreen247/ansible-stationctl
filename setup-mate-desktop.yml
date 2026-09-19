@@ -141,6 +141,53 @@
       mode: "0600"
     tags: [mate, lightdm]
 
+  # Give the login user's profile the classic Debian swirl instead of
+  # whatever silhouette/gravatar AccountsService falls back to. Source PNG
+  # is our own repo asset (files/mate-desktop/debian-swirl-avatar.png,
+  # rasterized from Papirus's debian-swirl icon) rather than a path into a
+  # system package — the greeter background broke once already (see
+  # 46ec1f0) when desktop-base was purged out from under a path like that.
+  - name: Ensure AccountsService user file exists for the login user
+    ansible.builtin.copy:
+      dest: "/var/lib/AccountsService/users/{{ vm_enduser_name }}"
+      content: |
+        [User]
+      owner: root
+      group: root
+      mode: "0600"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, lightdm, avatar]
+
+  - name: Install the Debian swirl avatar image
+    ansible.builtin.copy:
+      src: files/mate-desktop/debian-swirl-avatar.png
+      dest: "/var/lib/AccountsService/icons/{{ vm_enduser_name }}"
+      owner: root
+      group: root
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, lightdm, avatar]
+
+  - name: Point AccountsService at the Debian swirl avatar for the login user
+    ansible.builtin.lineinfile:
+      path: "/var/lib/AccountsService/users/{{ vm_enduser_name }}"
+      regexp: '^Icon='
+      line: "Icon=/var/lib/AccountsService/icons/{{ vm_enduser_name }}"
+      insertafter: '^\[User\]'
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, lightdm, avatar]
+
+  - name: Also drop the swirl as ~/.face for the login user (legacy avatar fallback)
+    ansible.builtin.copy:
+      src: files/mate-desktop/debian-swirl-avatar.png
+      dest: "/home/{{ vm_enduser_name }}/.face"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, lightdm, avatar]
+
   # A VM endpoint (remote-workstation) is reached exclusively via TigerVNC
   # (setup-remote-access.yml) — there's no physical console user waiting at
   # a greeter, so lightdm just burns RAM/GPU on the framebuffer or fights
