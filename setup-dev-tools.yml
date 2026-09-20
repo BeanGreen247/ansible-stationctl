@@ -114,6 +114,37 @@
       state: present
     tags: [dev, vscode]
 
+  # Machine-level policy (VS Code 1.106+, /etc/vscode/policy.json) — added
+  # 2026-09-20 after Settings Sync was found to have silently dropped
+  # chat.disableAIFeatures between the two workstations' then-separate
+  # accounts (each user had their own GitHub-account-scoped sync, so
+  # nothing ever actually propagated between them). Per VS Code's own
+  # enterprise-policy docs, a policy value "overrides the VS Code setting
+  # value configured at any level (default, user, and workspace)" — root-
+  # owned, outside the end user's home dir entirely, so it can't drift via
+  # Settings Sync, a signed-in-account swap, or a per-user settings.json
+  # edit the way the earlier fix could. This is now the primary AI/
+  # telemetry lockdown; the end user's own settings.json (Settings-Sync-
+  # owned, untouched here) still carries the granular chat.*/
+  # github.copilot.* behavior toggles on top for defense in depth.
+  - name: Ensure /etc/vscode directory exists
+    ansible.builtin.file:
+      path: /etc/vscode
+      state: directory
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [dev, vscode]
+
+  - name: Deploy machine-level VS Code policy (AI features + telemetry off)
+    ansible.builtin.template:
+      src: templates/vscode-policy.json.j2
+      dest: /etc/vscode/policy.json
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [dev, vscode]
+
   # VS Code Settings Sync stores its OAuth refresh token via libsecret,
   # which needs a working Secret Service provider — confirmed missing
   # entirely on the VM (gnome-keyring wasn't installed at all). Installing
@@ -225,11 +256,43 @@
   # (no seed content, no lineinfile/blockinfile patches, no extension
   # installs). Both are owned by VS Code Settings Sync against the end
   # user's own GitHub account instead — Copilot/AI-tool blocking
-  # (extensions.allowed), chat.disableAIFeatures, Todo-Tree's ripgrep path,
-  # etc. all live in the synced settings.json itself and propagate to every
-  # machine on that account on their own. Re-running this playbook must not
-  # fight that: it only touches argv.json (below), which Settings Sync does
-  # not cover.
+  # (extensions.allowed), Todo-Tree's ripgrep path, etc. all live in the
+  # synced settings.json itself and propagate to every machine on that
+  # account on their own. Re-running this playbook must not fight that: it
+  # only touches argv.json (below), which Settings Sync does not cover.
+  #
+  # ONE deliberate exception, added 2026-09-20: chat.disableAIFeatures.
+  # Found live that local-workstation's synced settings.json carried every
+  # granular github.copilot.*/chat.* toggle (dozens of them) but was
+  # missing this one key — the actual master switch that hides the
+  # Chat/Copilot UI surface entirely (activity bar icon, command palette
+  # entries, inline chat). The granular toggles only neuter behavior of an
+  # already-visible surface; without this key the icons/menus stay visible
+  # regardless. remote-workstation had it, local-workstation didn't — pure
+  # Settings Sync drift between the two, undetectable without diffing both
+  # machines by hand. Enforced idempotently below (checked before
+  # inserting, so it's a no-op once present) rather than left to sync
+  # alone, since sync already proved it can silently drop this specific
+  # key. Every other setting stays exclusively Settings Sync's, as above.
+  - name: Check whether settings.json exists yet
+    ansible.builtin.stat:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
+    register: _vscode_settings_json
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  - name: Enforce chat.disableAIFeatures in settings.json (Settings Sync drift guard)
+    ansible.builtin.lineinfile:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
+      regexp: '^\s*"chat\.disableAIFeatures"\s*:'
+      insertafter: '^\{$'
+      line: '  "chat.disableAIFeatures": true,'
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _vscode_settings_json.stat.exists
+    tags: [dev, vscode]
 
   - name: Install dev tool packages
     ansible.builtin.apt:

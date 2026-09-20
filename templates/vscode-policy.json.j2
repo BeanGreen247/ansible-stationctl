@@ -1,0 +1,26 @@
+{
+  "TelemetryLevel": "off",
+  "EnableFeedback": false,
+  "ExtensionsAutoUpdate": "off",
+  "AllowedExtensions": {
+    "*": true{% for ext in vscode_ai_extension_blocklist %},
+    "{{ ext }}": false{% endfor %}
+
+  },
+  "ChatAgentMode": false,
+  "ChatMCP": "none",
+  "ChatPluginsEnabled": false,
+  "ChatHooks": false,
+  "ChatAgentExtensionTools": false,
+  "BrowserChatTools": false,
+  "AgentsVoice": false,
+  "DictationEnabled": false,
+  "DictationLLMCleanup": false,
+  "CopilotNextEditSuggestions": false,
+  "CopilotReviewAgent": false,
+  "CopilotReviewSelection": false,
+  "CopilotSessionSync": false,
+  "CopilotOtelEnabled": false,
+  "Claude3PIntegration": false,
+  "Codex3PIntegration": false
+}
