@@ -376,6 +376,58 @@
     notify: Update dconf databases
     tags: [mate, wallpaper]
 
+  # System-db defaults (above) only take effect where no *user*-db override
+  # exists — dconf's user db always wins over system db, even an empty one.
+  # remote-workstation's login user (kenny) had picture-filename='' sitting
+  # in ~/.config/dconf/user from before this feature existed (MATE writes it
+  # the first time the Appearance dialog is touched), which silently
+  # shadowed the managed wallpaper — confirmed via `dconf dump
+  # /org/mate/desktop/background/` showing the correct system value while
+  # the live session stayed blank. local-workstation's user never touched
+  # that dialog, so it had no such override and the drift never showed up
+  # there. dbus-run-session is needed because dconf write/reset requires a
+  # session bus even with no one logged in.
+  - name: Check for a stale empty per-user wallpaper override (predates this feature)
+    ansible.builtin.command: dconf read /org/mate/desktop/background/picture-filename
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    register: _wallpaper_user_override
+    changed_when: false
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _wallpaper_matches | length > 0
+    tags: [mate, wallpaper]
+
+  # Only clears an explicit empty string (dconf prints '' for that, vs. no
+  # output at all for an unset key) — never touches a real custom value the
+  # user picked on purpose, so this stays a one-time repair, not perpetual
+  # enforcement against user choice.
+  #
+  # Writing via a throwaway dbus-run-session bus (as opposed to the user's
+  # real one) fixes the on-disk dconf db but sends its change notification
+  # nowhere — confirmed live on remote-workstation: a running MATE session
+  # kept the old (blank) background until the reset was replayed against
+  # the actual session bus at /run/user/<uid>/bus, at which point caja
+  # repainted immediately with no restart needed. So: use the real bus when
+  # a session is live, and only fall back to a throwaway one (nobody's
+  # around to notify anyway) when it isn't.
+  - name: Clear stale empty per-user wallpaper override so the system default applies
+    ansible.builtin.shell: |
+      set -e
+      uid=$(id -u "{{ vm_enduser_name }}")
+      if [ -S "/run/user/$uid/bus" ]; then
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" dconf reset /org/mate/desktop/background/picture-filename
+      else
+        dbus-run-session -- dconf reset /org/mate/desktop/background/picture-filename
+      fi
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _wallpaper_matches | length > 0
+      - _wallpaper_user_override.stdout | default('') == "''"
+    tags: [mate, wallpaper]
+
   - name: Note that no wallpaper image was found for this host yet
     ansible.builtin.debug:
       msg: >-
