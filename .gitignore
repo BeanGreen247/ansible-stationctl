@@ -1,0 +1,33 @@
+# Ansible credentials — never commit real values
+group_vars/all/main.yml
+host_vars/*/vault.yml
+
+# Ansible retry files
+*.retry
+
+# Downloaded collections
+collections/ansible_collections
+collections/ansible_collections/*
+
+# Ansible internal cache/lock
+.ansible/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+
+.claude
+.claude/*
+
+# Transient state written by scripts/run_playbook.py and
+# scripts/check_ip_drift.py — never committed, cleared by --apply/--ack.
+.ip-drift.lock
+.idempotency-drift.lock
+
+# Append-only local operational logs from those same scripts — grows on
+# every run, not repo content.
+docs/run-log.md
+docs/ip-resolution-log.md

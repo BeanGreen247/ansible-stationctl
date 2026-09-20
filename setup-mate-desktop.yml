@@ -1,0 +1,577 @@
+# setup-mate-desktop.yml
+#
+# Overview
+#   Installs a minimal MATE desktop (deliberately NOT task-mate-desktop, which
+#   pulls in LibreOffice/games/extra applets) and applies a system-wide default
+#   config: a single bottom panel only, compositing off, and a dark theme as a
+#   placeholder for the "submarine" look (mate_marco_theme in group_vars).
+#
+#   Defaults are applied via /etc/dconf/db/local — a system-wide dconf profile
+#   that every user gets by default but can still override locally. This keeps
+#   the config Ansible-managed (no per-user session needed) and idempotent.
+#
+#   NOTE: the exact panel object layout (which applets, in what order) is a
+#   best-effort default written from known MATE dconf schema paths — it has
+#   not been visually verified on a live session yet. If it doesn't come out
+#   exactly right first boot, use the MATE Panel's own "Reset Panel Layout" or
+#   tweak group_vars/workstations.yml + re-run; that's the whole point of
+#   this repo being playbook-driven.
+#
+#   KNOWN LIMITATION: MATE 1.26 in Debian 13/trixie has no stable Wayland
+#   session — this is X11 only. Remote access uses TigerVNC (X11), not a
+#   Wayland remote-desktop protocol. Confirmed acceptable trade-off for the
+#   lighter resource footprint.
+#
+# Target hosts
+#   ansible-playbook setup-mate-desktop.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Install and configure minimal MATE desktop
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  - name: Install MATE desktop packages
+    ansible.builtin.apt:
+      name: "{{ mate_packages }}"
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [mate, packages]
+
+  - name: Ensure /etc/apt/keyrings exists (for Brave's signed-by repo)
+    ansible.builtin.file:
+      path: /etc/apt/keyrings
+      state: directory
+      mode: "0755"
+    tags: [mate, browser]
+
+  - name: Add Brave browser apt signing key
+    ansible.builtin.get_url:
+      url: https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+      dest: /etc/apt/keyrings/brave-browser-archive-keyring.gpg
+      mode: "0644"
+    tags: [mate, browser]
+
+  - name: Add Brave browser apt repository
+    ansible.builtin.apt_repository:
+      repo: "deb [signed-by=/etc/apt/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main"
+      filename: brave-browser-release
+      state: present
+      update_cache: true
+    tags: [mate, browser]
+
+  - name: Install Brave browser
+    ansible.builtin.apt:
+      name: brave-browser
+      state: present
+    tags: [mate, browser]
+
+  # Same fix as VS Code's password-store=basic (setup-dev-tools.yml) —
+  # Brave is Chromium-based and honors the same flag family, avoiding a
+  # dependency on gnome-keyring being unlockable at all. Without this,
+  # Brave (like VS Code before the fix) prompts to create/unlock a keyring
+  # passphrase the first time it needs to store a saved password/sync
+  # secret — same underlying cause: no PAM login event on the VNC-started
+  # session to auto-unlock via, and no guarantee an existing keyring's
+  # stored password matches the login password on the lightdm-started one
+  # either. ~/.config/brave-flags.conf is Chromium's own supported
+  # user-level flags file, read by the browser binary itself at startup
+  # (not just the wrapper script) — one flag per line.
+  - name: Ensure end-user's ~/.config directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, browser]
+
+  - name: Set Brave to use basic password-store (avoids gnome-keyring prompts)
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/brave-flags.conf"
+      content: |
+        --password-store=basic
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, browser]
+
+  - name: Ensure lightdm.conf.d directory exists
+    ansible.builtin.file:
+      path: /etc/lightdm/lightdm.conf.d
+      state: directory
+      mode: "0755"
+    tags: [mate, lightdm]
+
+  - name: Set MATE as the default LightDM session
+    ansible.builtin.copy:
+      dest: /etc/lightdm/lightdm.conf.d/50-mate.conf
+      content: |
+        [Seat:*]
+        user-session=mate
+        greeter-session=lightdm-gtk-greeter
+        greeter-hide-users=false
+        greeter-show-manual-login=false
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [mate, lightdm]
+
+  # AccountsService is installed, so it's authoritative for the greeter's
+  # user list — /etc/lightdm/users.conf's hidden-users is silently ignored
+  # whenever AccountsService is present, so hiding ansibleuser (the
+  # automation account, not a human who logs in at the console) has to go
+  # through AccountsService itself instead. accounts-daemon watches this
+  # directory and picks the flag up without a restart.
+  - name: Hide the ansibleuser automation account from the LightDM greeter
+    ansible.builtin.copy:
+      dest: /var/lib/AccountsService/users/ansibleuser
+      content: |
+        [User]
+        SystemAccount=true
+      owner: root
+      group: root
+      mode: "0600"
+    tags: [mate, lightdm]
+
+  # Give the login user's profile the classic Debian swirl instead of
+  # whatever silhouette/gravatar AccountsService falls back to. Source PNG
+  # is our own repo asset (files/mate-desktop/debian-swirl-avatar.png,
+  # rasterized from Papirus's debian-swirl icon) rather than a path into a
+  # system package — the greeter background broke once already (see
+  # 46ec1f0) when desktop-base was purged out from under a path like that.
+  - name: Ensure AccountsService user file exists for the login user
+    ansible.builtin.copy:
+      dest: "/var/lib/AccountsService/users/{{ vm_enduser_name }}"
+      content: |
+        [User]
+      owner: root
+      group: root
+      mode: "0600"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, lightdm, avatar]
+
+  - name: Install the Debian swirl avatar image
+    ansible.builtin.copy:
+      src: files/mate-desktop/debian-swirl-avatar.png
+      dest: "/var/lib/AccountsService/icons/{{ vm_enduser_name }}"
+      owner: root
+      group: root
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, lightdm, avatar]
+
+  - name: Point AccountsService at the Debian swirl avatar for the login user
+    ansible.builtin.lineinfile:
+      path: "/var/lib/AccountsService/users/{{ vm_enduser_name }}"
+      regexp: '^Icon='
+      line: "Icon=/var/lib/AccountsService/icons/{{ vm_enduser_name }}"
+      insertafter: '^\[User\]'
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, lightdm, avatar]
+
+  - name: Also drop the swirl as ~/.face for the login user (legacy avatar fallback)
+    ansible.builtin.copy:
+      src: files/mate-desktop/debian-swirl-avatar.png
+      dest: "/home/{{ vm_enduser_name }}/.face"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, lightdm, avatar]
+
+  # A VM endpoint (remote-workstation) is reached exclusively via TigerVNC
+  # (setup-remote-access.yml) — there's no physical console user waiting at
+  # a greeter, so lightdm just burns RAM/GPU on the framebuffer or fights
+  # VNC for the display. Masked there. A bare-metal workstation DOES have a
+  # physical console someone logs into directly, so it needs a real display
+  # manager — lightdm-gtk-greeter is already installed for this.
+  - name: Stop and mask lightdm service (VM only — VNC-only, no local console login)
+    ansible.builtin.systemd:
+      name: lightdm
+      state: stopped
+      enabled: false
+      masked: true
+    when: machine_role == 'vm'
+    tags: [mate, lightdm]
+
+  - name: Enable and start lightdm service (bare-metal only — real physical console login)
+    ansible.builtin.systemd:
+      name: lightdm
+      state: started
+      enabled: true
+      masked: false
+    when: machine_role == 'bare-metal'
+    tags: [mate, lightdm]
+
+  - name: Ensure system-wide dconf profile directory exists
+    ansible.builtin.file:
+      path: /etc/dconf/db/local.d
+      state: directory
+      mode: "0755"
+    tags: [mate, dconf]
+
+  - name: Ensure dconf profile directory exists
+    ansible.builtin.file:
+      path: /etc/dconf/profile
+      state: directory
+      mode: "0755"
+    tags: [mate, dconf]
+
+  - name: Register the system 'local' dconf database for all users
+    ansible.builtin.copy:
+      dest: /etc/dconf/profile/user
+      content: |
+        user-db:user
+        system-db:local
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf]
+
+  # MultiLoad only draws graphs, no persistent numeric readout — this is a
+  # separate MATE "Command" applet (runs a script on an interval, shows its
+  # stdout as panel text) placed next to the graphs for the actual MiB/GiB
+  # + percentage figure.
+  - name: Deploy RAM status script for the panel Command applet
+    ansible.builtin.copy:
+      dest: /usr/local/bin/stationctl-ram-status.sh
+      content: |
+        #!/bin/sh
+        free -m | awk '/^Mem:/ { printf "RAM: %.1fG/%.1fG (%d%%)", $3/1024, $2/1024, ($3/$2)*100 }'
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [mate, dconf, panel]
+
+  # Backs the panel-layout "separator" object (templates/panel-layout.ini.j2)
+  # — a Command applet, not MATE's native 'separator' object-type, which
+  # draws a themed groove/line via a hardcoded Cairo call inside mate-panel
+  # that no amount of GTK CSS can reach (confirmed: even a blanket
+  # `* { color: red !important }` in a system-wide gtk.css had zero effect
+  # on it). A Command applet renders as bare text with no border/background
+  # of its own, so it's invisible spacing by construction — as long as its
+  # output isn't truly empty: a completely empty stdout renders as a
+  # stray "#" placeholder (confirmed live), so this prints a single space
+  # instead, which renders as nothing.
+  - name: Deploy blank spacer script for the panel Command applet
+    ansible.builtin.copy:
+      dest: /usr/local/bin/stationctl-blank.sh
+      content: |
+        #!/bin/sh
+        printf ' '
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [mate, dconf, panel]
+
+  # Battery/AC status moved to a proper iOS-style tray icon
+  # (battery-status-tray, setup-dev-applets.yml) and that in turn by the
+  # native battstat panel applet just below — remove the leftover script
+  # from any host either of those ran on before this.
+  - name: Remove the old plain-text battery-status script (superseded)
+    ansible.builtin.file:
+      path: /usr/local/bin/stationctl-battery-status.sh
+      state: absent
+    tags: [mate, power, cleanup]
+
+  # upower (battstat's charge-state source below) is installed via
+  # workstation_power_packages in setup-base-debian.yml, alongside
+  # mate-power-manager.
+
+  - name: Configure single bottom panel layout (best-effort default)
+    ansible.builtin.template:
+      src: templates/panel-layout.ini.j2
+      dest: /etc/dconf/db/local.d/01-panel-layout
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf, panel]
+
+  # org.mate.background/show-desktop-icons is a legacy key that no longer
+  # actually controls this in MATE 1.26 — caja draws the desktop icon layer
+  # itself, governed by org.mate.caja.desktop's per-icon-type visibility
+  # keys. All false = nothing ever gets generated, not just hidden.
+  - name: Disable desktop icons entirely (caja)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/03-no-desktop-icons
+      content: |
+        [org/mate/background]
+        show-desktop-icons=false
+
+        [org/mate/caja/desktop]
+        home-icon-visible=false
+        computer-icon-visible=false
+        network-icon-visible=false
+        trash-icon-visible=false
+        volumes-visible=false
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf, desktop]
+
+  - name: Configure theme and compositing (dark theme, compositing off for performance)
+    ansible.builtin.template:
+      src: templates/dconf-theme.ini.j2
+      dest: /etc/dconf/db/local.d/02-theme
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf, theme]
+
+  # ---------------------------------------------------------------------
+  # Per-workstation wallpaper — see files/wallpapers/README.md. Looked up
+  # by inventory hostname on the controller so each host in the fleet gets
+  # its own image with zero host_vars plumbing; a host with no file yet
+  # just keeps its current background until one's added, nothing breaks.
+  # ---------------------------------------------------------------------
+  - name: Ensure the wallpaper directory exists
+    ansible.builtin.file:
+      path: /usr/share/backgrounds/stationctl
+      state: directory
+      mode: "0755"
+    tags: [mate, wallpaper]
+
+  # query('fileglob', ...) always runs on the controller regardless of
+  # which host the task targets — no delegate_to/become needed just to
+  # check what's in the repo's own files/wallpapers/ directory.
+  - name: Look up this host's wallpaper image (files/wallpapers/<hostname>.*)
+    ansible.builtin.set_fact:
+      _wallpaper_matches: "{{ query('fileglob', playbook_dir + '/files/wallpapers/' + inventory_hostname + '.*') }}"
+    tags: [mate, wallpaper]
+
+  - name: Deploy this host's wallpaper image
+    ansible.builtin.copy:
+      src: "wallpapers/{{ _wallpaper_matches[0] | basename }}"
+      dest: "/usr/share/backgrounds/stationctl/{{ _wallpaper_matches[0] | basename }}"
+      owner: root
+      group: root
+      mode: "0644"
+    when: _wallpaper_matches | length > 0
+    tags: [mate, wallpaper]
+
+  - name: Set this host's wallpaper as the MATE desktop background
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/04-wallpaper
+      content: |
+        [org/mate/desktop/background]
+        picture-filename='/usr/share/backgrounds/stationctl/{{ _wallpaper_matches[0] | basename }}'
+        picture-options='zoom'
+      owner: root
+      group: root
+      mode: "0644"
+    when: _wallpaper_matches | length > 0
+    notify: Update dconf databases
+    tags: [mate, wallpaper]
+
+  # System-db defaults (above) only take effect where no *user*-db override
+  # exists — dconf's user db always wins over system db, even an empty one.
+  # remote-workstation's login user (kenny) had picture-filename='' sitting
+  # in ~/.config/dconf/user from before this feature existed (MATE writes it
+  # the first time the Appearance dialog is touched), which silently
+  # shadowed the managed wallpaper — confirmed via `dconf dump
+  # /org/mate/desktop/background/` showing the correct system value while
+  # the live session stayed blank. local-workstation's user never touched
+  # that dialog, so it had no such override and the drift never showed up
+  # there. dbus-run-session is needed because dconf write/reset requires a
+  # session bus even with no one logged in.
+  - name: Check for a stale empty per-user wallpaper override (predates this feature)
+    ansible.builtin.command: dconf read /org/mate/desktop/background/picture-filename
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    register: _wallpaper_user_override
+    changed_when: false
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _wallpaper_matches | length > 0
+    tags: [mate, wallpaper]
+
+  # Only clears an explicit empty string (dconf prints '' for that, vs. no
+  # output at all for an unset key) — never touches a real custom value the
+  # user picked on purpose, so this stays a one-time repair, not perpetual
+  # enforcement against user choice.
+  #
+  # Writing via a throwaway dbus-run-session bus (as opposed to the user's
+  # real one) fixes the on-disk dconf db but sends its change notification
+  # nowhere — confirmed live on remote-workstation: a running MATE session
+  # kept the old (blank) background until the reset was replayed against
+  # the actual session bus at /run/user/<uid>/bus, at which point caja
+  # repainted immediately with no restart needed. So: use the real bus when
+  # a session is live, and only fall back to a throwaway one (nobody's
+  # around to notify anyway) when it isn't.
+  - name: Clear stale empty per-user wallpaper override so the system default applies
+    ansible.builtin.shell: |
+      set -e
+      uid=$(id -u "{{ vm_enduser_name }}")
+      if [ -S "/run/user/$uid/bus" ]; then
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" dconf reset /org/mate/desktop/background/picture-filename
+      else
+        dbus-run-session -- dconf reset /org/mate/desktop/background/picture-filename
+      fi
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _wallpaper_matches | length > 0
+      - _wallpaper_user_override.stdout | default('') == "''"
+    tags: [mate, wallpaper]
+
+  - name: Note that no wallpaper image was found for this host yet
+    ansible.builtin.debug:
+      msg: >-
+        No wallpaper image found for {{ inventory_hostname }} at
+        files/wallpapers/{{ inventory_hostname }}.* — drop one in and re-run
+        with --tags wallpaper to apply it. Current background left as-is.
+    when: _wallpaper_matches | length == 0
+    tags: [mate, wallpaper]
+
+  # lightdm-gtk-greeter's shipped default (01_debian.conf) points its
+  # background at desktop-base's login-background.svg, which no longer
+  # exists now that desktop-base is purged below — the greeter was falling
+  # back to a blank/undefined background. Reuse this host's own desktop
+  # wallpaper (deployed above) so the login screen matches the desktop, and
+  # match the same Arc-Dark/Papirus-Dark theme too; fall back to a plain
+  # dark color on a host with no wallpaper image yet.
+  - name: Configure LightDM GTK greeter (dark theme, reuse desktop wallpaper)
+    ansible.builtin.copy:
+      dest: /etc/lightdm/lightdm-gtk-greeter.conf
+      content: |
+        [greeter]
+        theme-name={{ mate_gtk_theme }}
+        icon-theme-name={{ mate_icon_theme }}
+        background={{ '/usr/share/backgrounds/stationctl/' + (query('fileglob', playbook_dir + '/files/wallpapers/' + inventory_hostname + '.*')[0] | basename) if query('fileglob', playbook_dir + '/files/wallpapers/' + inventory_hostname + '.*') | length > 0 else '#1b1b1b' }}
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [mate, lightdm, wallpaper]
+
+  # desktop-base ships ~10 unrelated bundled theme sets (grub splash images,
+  # plymouth boot themes, lockscreen/login backgrounds, and the "swirl"
+  # wallpaper MATE was defaulting to via /usr/share/images/desktop-base) —
+  # dead weight once a host has its own managed wallpaper above.
+  # grub-common/plymouth/lightdm-gtk-greeter only *suggest* it, nothing
+  # actually depends on it (confirmed via `apt-get -s purge desktop-base`
+  # on local-workstation, 2026-09-18: 0 broken, plymouth/grub untouched),
+  # so purging it is safe and doesn't cascade into removing plymouth.
+  - name: Purge desktop-base (bundled themes/wallpapers/splash images, unused)
+    ansible.builtin.apt:
+      name: desktop-base
+      state: absent
+      purge: true
+    tags: [mate, cleanup]
+
+  # mate-power-manager comes along with mate-desktop-environment-core and
+  # autostarts via XDG autostart (not a systemd unit), polling upower for
+  # battery/AC status. Pure overhead on a VM with no battery to report on;
+  # genuinely needed on local-workstation (a real laptop). Gated on
+  # machine_role, not removed unconditionally — same shape as the CPU
+  # governor split. Overriding the .desktop with Hidden=true is the
+  # standard way to suppress one autostart entry without uninstalling the
+  # package (something else might still want it, e.g. manually launched).
+  - name: Disable mate-power-manager autostart on VMs (no battery, pure overhead)
+    ansible.builtin.copy:
+      dest: /etc/xdg/autostart/mate-power-manager.desktop
+      content: |
+        [Desktop Entry]
+        Type=Application
+        Name=Power Manager
+        Exec=/usr/bin/mate-power-manager
+        Hidden=true
+        X-MATE-Autostart-enabled=false
+      owner: root
+      group: root
+      mode: "0644"
+    when: machine_role | default('vm') == 'vm'
+    tags: [mate, power]
+
+  # Deliberately no "restore on bare-metal" counterpart task here. This
+  # used to `file: state: absent` the same path on non-VM hosts, but that
+  # path IS the package's own shipped autostart file (confirmed via
+  # `dpkg -S`) — deleting it doesn't clean up a leftover override, it
+  # disables mate-power-manager's autostart entirely, contradicting the
+  # comment two tasks up ("genuinely needed on local-workstation"). Found
+  # 2026-09-18 chasing a duplicate battery icon. On bare-metal, just leave
+  # the package's own file alone — it already ships enabled by default.
+
+  # Reverted: battstat (the "retro" native panel applet, tried as the
+  # single battery indicator instead of this) turned out flaky — its
+  # embedded window intermittently collapses to 1px wide on start,
+  # sometimes needing a manual panel-size nudge to recover, and didn't
+  # reliably survive a reboot. Back to mate-power-manager's own status
+  # icon as the one battery indicator instead. Harmless to set on hosts
+  # where mate-power-manager never autostarts (VMs) — nothing reads it.
+  - name: Show mate-power-manager's own status icon (the one battery indicator)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/05-power-manager-icon
+      content: |
+        [org/mate/power-manager]
+        icon-policy='present'
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, power, dconf]
+
+  # blueman's Bluetooth icon defaults to StatusNotifierItem (SNI), sharing
+  # the single indicators/mate-indicator-applet-complete host with the
+  # dev-applets tray apps (dotfile-sync-tray, infra-connections) — there's
+  # only ever one SNI host on the panel, so anything using SNI ends up
+  # bundled together with no way to reorder within it. blueman also ships
+  # a legacy XEmbed fallback (its StatusIcon plugin) that lands in
+  # notification-area instead, alongside sound/network — forcing that by
+  # disabling the SNI plugin genuinely separates it. Traced via blueman's
+  # own source (PluginManager.py): a plugin loads unless "!ClassName" is
+  # in plugin-list AND it's __unloadable__ (true by default) — confirmed
+  # live that "!StatusNotifierItem" (not a "-" prefix, that's a no-op)
+  # is what actually works, and verified via `xwininfo` that blueman's
+  # icon is then a real embedded XEmbed child of notification-area-applet.
+  - name: Force blueman onto its legacy XEmbed tray icon (bare-metal only)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/06-blueman-tray
+      content: |
+        [org/blueman/general]
+        plugin-list=['!StatusNotifierItem']
+      owner: root
+      group: root
+      mode: "0644"
+    when: machine_role == 'bare-metal'
+    notify: Update dconf databases
+    tags: [mate, bluetooth, dconf]
+
+  - name: Ensure dconf locks directory exists
+    ansible.builtin.file:
+      path: /etc/dconf/db/local.d/locks
+      state: directory
+      mode: "0755"
+    tags: [mate, dconf]
+
+  - name: Lock panel layout and theme keys so they survive login resets
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/locks/00-stationctl
+      content: |
+        /org/mate/panel/general/toplevel-id-list
+        /org/mate/marco/general/theme
+        /org/mate/marco/general/compositing-manager
+        /org/mate/desktop/interface/monospace-font-name
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf]
+
+  handlers:
+  - name: Update dconf databases
+    ansible.builtin.command: dconf update
+    changed_when: true

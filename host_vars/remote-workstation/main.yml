@@ -1,0 +1,58 @@
+# host_vars/remote-workstation/main.yml
+# Non-secret, host-specific overrides for the Proxmox-hosted VM.
+# machine_role drives the ansible_virtualization_role-independent bits that
+# only make sense on a VM (e.g. qemu-guest-agent) in setup-base-debian.yml.
+machine_role: "vm"
+
+# Mandatory (see setup-kernel-perf-tuning.yml) — the VM's virtual disk is
+# backed by the homelab Proxmox host's HDD storage pool. VERIFY the device
+# name with `lsblk -d -o NAME,ROTA,TYPE` on the guest before the first
+# --tags kperf run ("sda" for SCSI/SATA-emulated disks, "vda" if the VM
+# uses the virtio-blk driver instead).
+workstation_drives:
+  sda: "hdd"
+
+# The preseed ISO used to install this box was a reused generic one (not
+# rebuilt per-VM), so it baked in a fallback hostname ("debian-vm") instead
+# of the vms.yml "name:" field ansible-proxmox actually created it as
+# (vm-debian-workstation-01, VMID 115). Correct it here so the two repos'
+# naming stays in sync.
+workstation_hostname: "vm-debian-workstation-01"
+
+# This is a Guacamole-reachable remote-desktop endpoint that should stay
+# lean in idle RAM — swap aggressively into zram (cheap, RAM-speed) rather
+# than hold onto anonymous memory. Tuned hyperaggressive on purpose:
+# nothing here is a hot local dev cache worth protecting the way it would
+# be on the bare-metal local-workstation, so bias hard toward a low idle
+# footprint over avoiding reclaim churn.
+#
+# The periodic drop_caches timer (workstation_dropcaches_interval_min) was
+# tried here and removed — at vfs_cache_pressure=500 the kernel already
+# reclaims clean page cache on its own fast enough that the forced timer
+# was redundant. Leaving it unset (default 0 / disabled) instead of
+# reintroducing it.
+workstation_swappiness: 100
+workstation_zram_percent: 150
+# Kernel default here was ~66MB (auto-sized from RAM); bumped to make kswapd
+# start background-reclaiming/swapping earlier instead of waiting for real
+# pressure — live check showed almost nothing in swap under normal load, so
+# this pushes swap usage up proactively for the desired low-idle-RAM profile.
+workstation_min_free_kbytes: 307200
+workstation_vfs_cache_pressure: 500
+
+# Disk-swap overflow tier, as a file (not a partition — the preseed install
+# creates none, see ansible-proxmox's debian-preseed.cfg.j2 no_swap=true).
+# Sits below zram in priority; zram absorbs everything until it's full.
+workstation_swapfile_gb: 8
+
+# Used by set-proxmox-notes.yml to credit both repos in the VM's Proxmox
+# notes field. VMID from ansible-proxmox/group_vars/all/vms.yml.
+proxmox_vmid: 115
+proxmox_vm_description: |
+  Managed by Ansible
+
+  Source: [BeanGreen247/ansible-proxmox](https://github.com/BeanGreen247/ansible-proxmox)
+
+  Source: [BeanGreen247/ansible-stationctl](https://github.com/BeanGreen247/ansible-stationctl)
+
+  Do not edit manually.

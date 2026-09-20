@@ -1,0 +1,118 @@
+[org/mate/panel/general]
+toplevel-id-list=['bottom']
+object-id-list=['mate-menu', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor', 'clock']
+# Per-object locked=true (below) only blocks dragging/moving — it does
+# NOT block "Remove From Panel" from the right-click menu, which is
+# exactly how notification-area got dropped from object-id-list above
+# (its own object properties survived untouched, only the list entry
+# was gone). locked-down disables the add/remove/move panel-editing
+# menu items panel-wide, so only this file (via dconf) can change the
+# layout going forward — it renders once and stays static otherwise.
+locked-down=true
+
+[org/mate/panel/toplevels/bottom]
+orientation='bottom'
+# Legacy XEmbed tray icons (nm-applet, mate-volume-control-status-icon)
+# render at EXACTLY this panel height with zero internal padding —
+# confirmed via `xwininfo`, their embedded windows were literally 32x32
+# at size=32, while native panel applets/SNI icons pad themselves and
+# looked proportionate at the same height. There's no separate icon-size
+# knob for the legacy tray (checked org.mate.panel.toplevel's schema —
+# nothing), so panel height is the only real lever. 24 confirmed live
+# (dconf write + screenshot) to make those two proportionate again
+# without making text/other applets illegible; bumped to 28 per a later
+# explicit size request.
+size=28
+auto-hide=false
+expand=true
+
+# mate-menu (Advanced MATE Menu, Linux Mint's port) replaces the stock
+# 'menu-bar' object-type — the stock menu has no search/filter at all and
+# no favorites; mate-menu adds both plus one-click uninstall, at the cost
+# of one extra package (python3-based, negligible RAM on these boxes).
+[org/mate/panel/objects/mate-menu]
+object-type='applet'
+applet-iid='MateMenuAppletFactory::MateMenuApplet'
+toplevel-id='bottom'
+position=0
+panel-right-stick=false
+locked=true
+
+[org/mate/panel/objects/window-list]
+object-type='applet'
+applet-iid='WnckletFactory::WindowListApplet'
+toplevel-id='bottom'
+position=50
+panel-right-stick=false
+locked=true
+
+[org/mate/panel/objects/notification-area]
+object-type='applet'
+applet-iid='NotificationAreaAppletFactory::NotificationArea'
+toplevel-id='bottom'
+position=5
+panel-right-stick=true
+locked=true
+
+# StatusNotifierItem/AppIndicator host — Qt6 apps (dotfile-sync-tray,
+# infra-connections) need this since Qt6 dropped legacy XEmbed tray
+# support; the notification-area applet above only hosts XEmbed. Used to
+# also host blueman-tray (Bluetooth) — all SNI clients share one host
+# applet with no way to reorder within it — but blueman is now forced
+# onto its legacy XEmbed fallback instead (see the blueman plugin-list
+# task in setup-mate-desktop.yml), landing it in notification-area
+# alongside sound/network instead of bundled in here with the dev-applets
+# tray dots. Confirmed via `xwininfo`: blueman's icon is a real embedded
+# child window of notification-area-applet now, not drawn inside this
+# SNI widget.
+[org/mate/panel/objects/indicators]
+object-type='applet'
+applet-iid='IndicatorAppletCompleteFactory::IndicatorAppletComplete'
+toplevel-id='bottom'
+position=0
+panel-right-stick=true
+locked=true
+
+[org/mate/panel/objects/ram-status]
+object-type='applet'
+applet-iid='CommandAppletFactory::CommandApplet'
+toplevel-id='bottom'
+position=3
+panel-right-stick=true
+locked=true
+
+[org/mate/panel/objects/ram-status/prefs]
+command='/usr/local/bin/stationctl-ram-status.sh'
+interval=4
+show-icon=false
+width=22
+
+[org/mate/panel/objects/sysmonitor]
+object-type='applet'
+applet-iid='MultiLoadAppletFactory::MultiLoadApplet'
+toplevel-id='bottom'
+position=2
+panel-right-stick=true
+locked=true
+
+[org/mate/panel/objects/sysmonitor/prefs]
+view-cpuload=true
+view-memload=true
+view-netload=true
+view-swapload=true
+view-diskload=false
+view-loadavg=false
+speed=2000
+size=40
+
+[org/mate/panel/objects/clock]
+object-type='applet'
+applet-iid='ClockAppletFactory::ClockApplet'
+toplevel-id='bottom'
+position=1
+panel-right-stick=true
+locked=true
+
+[org/mate/panel/objects/clock/prefs]
+show-seconds=false
+show-date=true

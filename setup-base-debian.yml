@@ -1,0 +1,388 @@
+# setup-base-debian.yml
+#
+# Overview
+#   Runs on any workstation (Proxmox VM or bare-metal) to install the base
+#   tool set, harden SSH, and create the end-user login account. This is the
+#   common floor every workstation shares before desktop/dev-tool/remote-access
+#   layers go on top. Idempotent — safe to re-run any time.
+#
+# What this playbook does
+#   * Updates and upgrades APT packages
+#   * Installs debian_base_packages (see group_vars/workstations.yml)
+#   * Installs broad font coverage (Noto/emoji/CJK/Nerd Fonts) so no
+#     terminal app renders tofu boxes for missing glyphs
+#   * Sets vim as the default system editor
+#   * Enables qemu-guest-agent automatically when running as a VM
+#     (detected via ansible_virtualization_role — no hardcoding per host)
+#   * Hardens SSH: key-only auth
+#   * Ensures ansibleuser has NOPASSWD sudo
+#   * Creates the end-user login account (vm_enduser_* in group_vars/all/main.yml)
+#
+# Target hosts
+#   ansible-playbook setup-base-debian.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Install base packages and harden workstation baseline
+  hosts: workstations
+  become: true
+  gather_facts: true
+  ignore_unreachable: true
+
+  tasks:
+
+  - name: Set system hostname (workstation_hostname override)
+    ansible.builtin.hostname:
+      name: "{{ workstation_hostname }}"
+    when: workstation_hostname | default('') | length > 0
+    tags: [base, hostname]
+
+  - name: Ensure /etc/hosts has the matching 127.0.1.1 entry
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: '^127\.0\.1\.1\s'
+      line: "127.0.1.1\t{{ workstation_hostname }}"
+    when: workstation_hostname | default('') | length > 0
+    tags: [base, hostname]
+
+  - name: Update APT package index
+    ansible.builtin.apt:
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [base, apt]
+
+  - name: Upgrade all packages to latest (safe-upgrade)
+    ansible.builtin.apt:
+      upgrade: safe
+    register: _apt_upgrade
+    tags: [base, apt, upgrade]
+
+  - name: Install base tool set
+    ansible.builtin.apt:
+      name: "{{ debian_base_packages }}"
+      state: present
+    tags: [base, packages]
+
+  - name: Install broad font coverage (Unicode/emoji/monospace)
+    ansible.builtin.apt:
+      name: "{{ terminal_font_packages }}"
+      state: present
+    tags: [base, fonts]
+
+  - name: Ensure per-font Nerd Fonts directories exist
+    ansible.builtin.file:
+      path: "/usr/local/share/fonts/nerd-fonts/{{ item }}"
+      state: directory
+      mode: "0755"
+    loop: "{{ nerd_fonts_names }}"
+    tags: [base, fonts]
+
+  - name: Download and extract Nerd Fonts (patched glyphs apt doesn't ship)
+    ansible.builtin.unarchive:
+      src: "https://github.com/ryanoasis/nerd-fonts/releases/download/{{ nerd_fonts_version }}/{{ item }}.zip"
+      dest: "/usr/local/share/fonts/nerd-fonts/{{ item }}"
+      remote_src: true
+    loop: "{{ nerd_fonts_names }}"
+    register: _nerd_fonts_download
+    tags: [base, fonts]
+
+  - name: Refresh system font cache
+    ansible.builtin.command: fc-cache -f
+    when: _nerd_fonts_download.changed
+    changed_when: true
+    tags: [base, fonts]
+
+  - name: Set vim as default editor (update-alternatives)
+    community.general.alternatives:
+      name: editor
+      path: /usr/bin/vim.basic
+    tags: [base, config]
+
+  - name: Ensure qemu-guest-agent is enabled and started (VM only)
+    ansible.builtin.apt:
+      name: qemu-guest-agent
+      state: present
+    when: ansible_virtualization_role | default('') == 'guest'
+    tags: [base, services, qemu]
+
+  - name: Start and enable qemu-guest-agent (VM only)
+    ansible.builtin.service:
+      name: qemu-guest-agent
+      state: started
+      enabled: true
+    when: ansible_virtualization_role | default('') == 'guest'
+    tags: [base, services, qemu]
+
+  # intel-media-va-driver-non-free lives in Debian's "non-free" component,
+  # not "non-free-firmware" — the preseed install only enables the latter
+  # (see /etc/apt/sources.list). Only bare-metal hosts need this at all.
+  - name: Enable contrib/non-free apt components (bare-metal GPU driver packages need it)
+    ansible.builtin.replace:
+      path: /etc/apt/sources.list
+      regexp: '^(deb(?:-src)? \S+ trixie\S* main) non-free-firmware$'
+      replace: '\1 contrib non-free non-free-firmware'
+    when: machine_role == 'bare-metal'
+    register: _apt_components
+    tags: [base, gpu, apt]
+
+  - name: Update APT cache after enabling new components
+    ansible.builtin.apt:
+      update_cache: true
+    when: _apt_components is changed
+    tags: [base, gpu, apt]
+
+  - name: Install GPU driver packages for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_gpu_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_gpu_packages[machine_role] | default([]) | length) > 0
+    tags: [base, gpu]
+
+  - name: Install sound driver/userspace packages for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_sound_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_sound_packages[machine_role] | default([]) | length) > 0
+    tags: [base, sound]
+
+  - name: Install power management packages for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_power_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_power_packages[machine_role] | default([]) | length) > 0
+    tags: [base, power]
+
+  # Debian's network-manager package ships with [ifupdown] managed=false
+  # in its default /etc/NetworkManager/NetworkManager.conf — any interface
+  # already defined in /etc/network/interfaces (enp4s0, lo, on this fleet)
+  # stays untouched/unmanaged, and NetworkManager only picks up interfaces
+  # that AREN'T listed there (i.e. wlp5s0). Confirmed by extracting the
+  # actual .deb's conffile before ever installing it, specifically to
+  # avoid this exact package silently taking over the interface this
+  # SSH session runs over. Verified live after install too (see
+  # docs/QUICKSTART.md's hard rule) — tailscale0/docker0 stayed up and
+  # unmanaged, only wlp5s0 came under NetworkManager's control.
+  - name: Install NetworkManager + applet for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_networkmanager_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_networkmanager_packages[machine_role] | default([]) | length) > 0
+    tags: [base, networkmanager]
+
+  - name: Enable and start NetworkManager (only where it was installed)
+    ansible.builtin.systemd:
+      name: NetworkManager
+      state: started
+      enabled: true
+    when: (workstation_networkmanager_packages[machine_role] | default([]) | length) > 0
+    tags: [base, networkmanager]
+
+  - name: Install Bluetooth stack for this machine's role
+    ansible.builtin.apt:
+      name: "{{ workstation_bluetooth_packages[machine_role] | default([]) }}"
+      state: present
+    when: (workstation_bluetooth_packages[machine_role] | default([]) | length) > 0
+    tags: [base, bluetooth]
+
+  - name: Enable and start bluetooth.service (only where the Bluetooth stack was installed)
+    ansible.builtin.systemd:
+      name: bluetooth
+      state: started
+      enabled: true
+    when: (workstation_bluetooth_packages[machine_role] | default([]) | length) > 0
+    tags: [base, bluetooth]
+
+  # blueman needs this to pair/trust devices without prompting for sudo each
+  # time — same idea as the sudo/docker groups above, kept as its own task
+  # (not folded into vm_enduser_groups) so a VM's end-user list stays
+  # untouched by a group that only means something with a real radio.
+  - name: Add end-user to the bluetooth group
+    ansible.builtin.user:
+      name: "{{ vm_enduser_name }}"
+      groups: bluetooth
+      append: true
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - (workstation_bluetooth_packages[machine_role] | default([]) | length) > 0
+    tags: [base, bluetooth, users]
+
+  # Remote-desktop endpoints must never sleep/suspend/hibernate — there's no
+  # physical way to wake a headless VM back up, and a suspended guest just
+  # looks like a dead VNC/Guacamole connection. Mask the systemd targets
+  # (belt) and tell logind to ignore idle/lid/power-key triggers
+  # (suspenders) — mate-power-manager isn't installed so it can't
+  # independently trigger a suspend either. VM only — this had no
+  # machine_role gate for a while and got applied to local-workstation
+  # (a real laptop) too, which is exactly why its mate-power-manager menu
+  # was missing Suspend/Hibernate: systemd reports those unavailable to
+  # logind/mate-power-manager once the targets are masked.
+  - name: Mask systemd sleep/suspend/hibernate targets (VM only)
+    ansible.builtin.systemd:
+      name: "{{ item }}"
+      masked: true
+    loop:
+      - sleep.target
+      - suspend.target
+      - hibernate.target
+      - hybrid-sleep.target
+    when: machine_role == 'vm'
+    tags: [base, power]
+
+  - name: Disable logind idle/lid/power-key suspend triggers (VM only)
+    ansible.builtin.lineinfile:
+      path: /etc/systemd/logind.conf
+      regexp: "^#?{{ item.key }}="
+      line: "{{ item.key }}={{ item.value }}"
+    loop:
+      - { key: "HandleSuspendKey", value: "ignore" }
+      - { key: "HandleHibernateKey", value: "ignore" }
+      - { key: "HandleLidSwitch", value: "ignore" }
+      - { key: "HandleLidSwitchExternalPower", value: "ignore" }
+      - { key: "IdleAction", value: "ignore" }
+    when: machine_role == 'vm'
+    notify: Restart logind
+    tags: [base, power]
+
+  # Bare-metal counterpart — explicitly restores stock laptop power
+  # behavior (real lid/suspend/hibernate/power-key handling) in case this
+  # host was previously masked/disabled by an earlier, ungated version of
+  # the tasks above. Unmasking + removing the logind.conf overrides
+  # (rather than writing explicit "suspend"/"hibernate" values) restores
+  # systemd's own compiled-in defaults instead of us guessing at them.
+  - name: Ensure systemd sleep/suspend/hibernate targets are unmasked (bare-metal only)
+    ansible.builtin.systemd:
+      name: "{{ item }}"
+      masked: false
+    loop:
+      - sleep.target
+      - suspend.target
+      - hibernate.target
+      - hybrid-sleep.target
+    when: machine_role == 'bare-metal'
+    tags: [base, power]
+
+  - name: Ensure logind idle/lid/power-key overrides are absent (bare-metal only)
+    ansible.builtin.lineinfile:
+      path: /etc/systemd/logind.conf
+      regexp: "^#?{{ item }}="
+      state: absent
+    loop:
+      - HandleSuspendKey
+      - HandleHibernateKey
+      - HandleLidSwitch
+      - HandleLidSwitchExternalPower
+      - IdleAction
+    when: machine_role == 'bare-metal'
+    notify: Restart logind
+    tags: [base, power]
+
+  - name: Disable SSH password authentication
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?PasswordAuthentication'
+      line: 'PasswordAuthentication no'
+      validate: '/usr/sbin/sshd -t -f %s'
+    notify: Restart sshd
+    tags: [base, ssh, security]
+
+  - name: Ensure SSH PublicKeyAuthentication is enabled
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?PubkeyAuthentication'
+      line: 'PubkeyAuthentication yes'
+      validate: '/usr/sbin/sshd -t -f %s'
+    notify: Restart sshd
+    tags: [base, ssh, security]
+
+  - name: Ensure ansibleuser sudoers file is correct
+    ansible.builtin.copy:
+      content: "ansibleuser ALL=(ALL) NOPASSWD:ALL\n"
+      dest: /etc/sudoers.d/ansibleuser
+      owner: root
+      group: root
+      mode: "0440"
+      validate: "/usr/sbin/visudo -cf %s"
+    tags: [base, sudo]
+
+  # ansibleuser is NOPASSWD so this never shows for it, but the end-user
+  # account (vm_enduser_name) is in the "sudo" group and types a real
+  # password — without pwfeedback the terminal gives zero feedback per
+  # keystroke, which looks broken/hung.
+  - name: Show asterisk feedback when typing the sudo password
+    ansible.builtin.copy:
+      content: "Defaults        pwfeedback\n"
+      dest: /etc/sudoers.d/pwfeedback
+      owner: root
+      group: root
+      mode: "0440"
+      validate: "/usr/sbin/visudo -cf %s"
+    tags: [base, sudo]
+
+  # vm_enduser_groups commonly includes "docker", which doesn't exist yet at
+  # this point in site.yml (setup-dev-tools.yml, which installs docker.io
+  # and thereby creates that group, runs later) — pre-create any named
+  # groups so user creation doesn't fail on a fresh host.
+  - name: Ensure end-user's groups exist
+    ansible.builtin.group:
+      name: "{{ item }}"
+      state: present
+    loop: "{{ vm_enduser_groups.split(',') }}"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [base, users]
+
+  - name: Set system timezone
+    community.general.timezone:
+      name: "{{ workstation_timezone | default('Europe/Prague') }}"
+    tags: [base, config]
+
+  # update_password: on_create is deliberate — this account may be a
+  # pre-existing one on the machine (e.g. local-workstation's "bean", set up
+  # before stationctl ever touched the box) with its own real login
+  # password. Without this, every re-run would stomp that password with
+  # vm_enduser_password_hash, which isn't guaranteed to match — or even be
+  # meant for — this specific machine's account.
+  - name: Create end-user account
+    ansible.builtin.user:
+      name: "{{ vm_enduser_name }}"
+      groups: "{{ vm_enduser_groups }}"
+      append: true
+      shell: "{{ vm_enduser_shell }}"
+      create_home: true
+      password: "{{ vm_enduser_password_hash | default('!') }}"
+      update_password: on_create
+    when: vm_enduser_name | default('') | length > 0
+    tags: [base, users]
+
+  - name: Set SSH authorized key for end-user
+    ansible.posix.authorized_key:
+      user: "{{ vm_enduser_name }}"
+      key: "{{ lookup('file', vm_enduser_ssh_pub_key_file) }}"
+      state: present
+    when: >
+      vm_enduser_name | default('') | length > 0 and vm_enduser_ssh_pub_key_file | default('') | length > 0
+    tags: [base, users]
+
+  - name: Print base setup summary
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "Base setup complete on: {{ inventory_hostname }}"
+      - "  OS:              {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      - "  Kernel:          {{ ansible_kernel }}"
+      - "  Virtualization:  {{ ansible_virtualization_role | default('bare-metal') }}"
+      - "  Packages upgraded: {{ _apt_upgrade.changed | ternary('yes', 'no (already up to date)') }}"
+      - "  SSH:             password auth OFF, key-only"
+      - "  End-user:        {{ vm_enduser_name | default('none configured') }}"
+      - "========================================================"
+    tags: [base, summary]
+
+  handlers:
+  - name: Restart sshd
+    ansible.builtin.service:
+      name: sshd
+      state: restarted
+
+  - name: Restart logind
+    ansible.builtin.systemd:
+      name: systemd-logind
+      state: restarted

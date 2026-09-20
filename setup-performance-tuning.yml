@@ -1,0 +1,510 @@
+# setup-performance-tuning.yml
+#
+# Overview
+#   Tunes zram/swappiness/compression algo DYNAMICALLY from each host's
+#   actually-detected RAM and vCPU count (ansible_memtotal_mb,
+#   ansible_processor_vcpus) rather than a fixed value — so the same
+#   playbook stays correct whether a workstation ends up sized exactly to
+#   the 2 vCPU / 2-4 GB budget or drifts from it. Tier tables live in this
+#   file's vars: below; set workstation_zram_percent /
+#   workstation_swappiness / workstation_zram_algo to an explicit value in
+#   group_vars/workstations.yml (or a host_vars override) to bypass
+#   auto-detection for a specific tier.
+#
+#   Tuning approach carried over from the Starhaven homelab host's own zram
+#   tuning (~/ksm-zswap-tuning.md): single compression layer only (zram, no
+#   zswap stacked on top — that caused real decompress/recompress churn
+#   there), swappiness kept at the proven-stable kernel default (60) except
+#   at the tightest RAM tier, and no forced/background reclaim daemon — the
+#   Starhaven doc found that fights KSM and evicts hot pages. This repo has
+#   no KSM (that's a hypervisor-level homelab-host concern, not a guest
+#   workstation one) — just zram + swappiness, sized to what's actually
+#   there, biased toward performance (lighter compression algo when vCPUs
+#   are scarce) since these are 2 vCPU boxes end to end.
+#
+# Target hosts
+#   ansible-playbook setup-performance-tuning.yml --limit workstations
+#
+# Real hardware this is tested against — local-workstation is a real
+# Lenovo ThinkPad E490 (Intel i5-8265U 4c/8t, 40GB DDR4, Toshiba NVMe
+# 256GB) rather than a VM, so its zram/swap tier lands on the "generous
+# RAM" end of the tables above on real silicon, not an estimate. Full
+# hardware profile in docs/README.md's "Tested Hardware Platform" section.
+#
+# Credit: Thomas Mozdren
+---
+- name: Apply performance tuning for the workstation resource budget
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  vars:
+    # First tier whose max_mb/max_vcpus is >= the detected value wins.
+    # Keep each list sorted ascending by its max_ threshold.
+    zram_percent_tiers:
+      - { max_mb: 1536, percent: 150 }   # very tight RAM: maximize compressed headroom
+      - { max_mb: 3072, percent: 100 }   # the 2-4GB budget's low end
+      - { max_mb: 6144, percent: 75 }    # matches Starhaven host's own chosen ratio
+      - { max_mb: 999999, percent: 50 }  # plenty of RAM: keep zram light
+
+    swappiness_tiers:
+      - { max_mb: 2048, value: 80 }      # tightest tier: swap to (fast) zram proactively
+      - { max_mb: 999999, value: 60 }    # kernel default — proven stable, no thrashing
+
+    zram_algo_tiers:
+      - { max_vcpus: 1, algo: "lz4" }     # single vCPU: favor speed over ratio
+      - { max_vcpus: 999, algo: "zstd" }  # 2+ vCPUs: zstd's better ratio is worth the cost
+
+  tasks:
+
+  - name: Install zram-tools
+    ansible.builtin.apt:
+      name: zram-tools
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [perf, zram]
+
+  - name: Resolve zram percent (manual override or auto-detected from RAM)
+    ansible.builtin.set_fact:
+      _stationctl_zram_percent: >-
+        {{ workstation_zram_percent
+           if (workstation_zram_percent | default('auto') != 'auto')
+           else (zram_percent_tiers | selectattr('max_mb', '>=', ansible_memtotal_mb) | first).percent }}
+    tags: [perf, zram]
+
+  - name: Resolve zram algorithm (manual override or auto-detected from vCPU count)
+    ansible.builtin.set_fact:
+      _stationctl_zram_algo: >-
+        {{ workstation_zram_algo
+           if (workstation_zram_algo | default('auto') != 'auto')
+           else (zram_algo_tiers | selectattr('max_vcpus', '>=', ansible_processor_vcpus | default(2)) | first).algo }}
+    tags: [perf, zram]
+
+  - name: Resolve swappiness (manual override or auto-detected from RAM)
+    ansible.builtin.set_fact:
+      _stationctl_swappiness: >-
+        {{ workstation_swappiness
+           if (workstation_swappiness | default('auto') != 'auto')
+           else (swappiness_tiers | selectattr('max_mb', '>=', ansible_memtotal_mb) | first).value }}
+    tags: [perf, sysctl]
+
+  - name: Configure zram swap percentage and algorithm
+    ansible.builtin.copy:
+      dest: /etc/default/zramswap
+      content: |
+        ALGO={{ _stationctl_zram_algo }}
+        PERCENT={{ _stationctl_zram_percent }}
+        PRIORITY=100
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Restart zramswap
+    tags: [perf, zram]
+
+  # Some hosts (e.g. VMID 115 / remote-workstation) still carry a leftover
+  # swap partition from an older preseed ISO run that predates this repo's
+  # no_swap=true preseed (see preseed/debian-preseed.cfg.j2). Left alone it
+  # just stacks a third swap tier on top of zram + /swapfile, which is where
+  # the "why is swap 17G not 5G" confusion came from. Detect anything in
+  # /proc/swaps that isn't zram or /swapfile and retire it: swapoff, drop
+  # from fstab, wipe the swap signature so a stray `swapon -a` can't revive
+  # it. This never touches the partition table, just the swap use of it.
+  #
+  # IMPORTANT: this can't distinguish "leftover preseed artifact" from "a
+  # normal, intentionally-provisioned swap partition" — both just look like
+  # "swap that isn't zram or /swapfile" to /proc/swaps. It enforces this
+  # repo's own policy (zram + optional /swapfile only, see host_vars
+  # comments) for the workstations it manages. Set
+  # workstation_remove_legacy_swap_partitions: false in host_vars for any
+  # host that's meant to keep a real swap partition.
+  - name: Detect legacy swap partitions not managed by this playbook
+    ansible.builtin.shell: |
+      set -o pipefail
+      awk 'NR>1 && $1 !~ /zram/ && $1 != "/swapfile" {print $1}' /proc/swaps
+    args:
+      executable: /bin/bash
+    register: _stationctl_legacy_swap
+    changed_when: false
+    check_mode: false
+    tags: [perf, swapfile]
+
+  - name: Disable legacy swap partition(s)
+    ansible.builtin.command: swapoff {{ item }}
+    loop: "{{ _stationctl_legacy_swap.stdout_lines }}"
+    when: workstation_remove_legacy_swap_partitions | default(true) | bool
+    tags: [perf, swapfile]
+
+  # Debian's installer writes fstab swap lines as "UUID=..." not the raw
+  # device path — ansible.posix.mount's state=absent matches on the src
+  # field verbatim, so passing the raw /dev/nvmeXnYpZ path here NEVER
+  # matched and silently left the stale line in fstab (found via
+  # `findmnt --verify` reporting "unreachable on boot required source"
+  # ahead of a reboot). Resolve the actual UUID first (must happen BEFORE
+  # wipefs below — once the signature is gone, blkid can't resolve it
+  # anymore) and match on either form.
+  - name: Resolve UUID for legacy swap partition(s), if any
+    ansible.builtin.command: blkid -s UUID -o value {{ item }}
+    loop: "{{ _stationctl_legacy_swap.stdout_lines }}"
+    register: _stationctl_legacy_swap_uuids
+    changed_when: false
+    failed_when: false
+    when: workstation_remove_legacy_swap_partitions | default(true) | bool
+    tags: [perf, swapfile]
+
+  - name: Remove legacy swap partition(s) from fstab (by UUID or raw device path)
+    ansible.builtin.lineinfile:
+      path: /etc/fstab
+      regexp: "^(UUID={{ item.stdout }}|{{ item.item }})\\s+\\S+\\s+swap\\s"
+      state: absent
+    loop: "{{ _stationctl_legacy_swap_uuids.results | default([]) }}"
+    when:
+      - workstation_remove_legacy_swap_partitions | default(true) | bool
+      - item.stdout | default('') | length > 0
+    tags: [perf, swapfile]
+
+  - name: Wipe swap signature from legacy partition(s)
+    ansible.builtin.command: wipefs -a {{ item }}
+    loop: "{{ _stationctl_legacy_swap.stdout_lines }}"
+    when: workstation_remove_legacy_swap_partitions | default(true) | bool
+    tags: [perf, swapfile]
+
+  # Once a legacy swap partition is retired above, it just sits there as
+  # dead space (that's what we did by hand on VMID 115: delete the DOS
+  # extended container + swap logical partition, grow the root partition
+  # into the freed sectors with sfdisk, partprobe, then online resize2fs).
+  # This task automates that so future hosts with the same preseed leftover
+  # don't need the by-hand treatment. It's deliberately conservative — it
+  # only acts when EVERY partition after root on the same disk is either
+  # unformatted (a DOS extended container) or swap-typed and unmounted; if
+  # anything else is back there (real data, an unknown fstype, something
+  # still mounted) it prints why and changes nothing. Re-running after it
+  # has already grown root is a safe no-op (no trailing partitions left).
+  # Set workstation_grow_root_fs: false in host_vars to opt a host out.
+  - name: Reclaim trailing swap-only partition space into the root filesystem
+    ansible.builtin.shell: |
+      set -e
+      python3 - <<'PY'
+      import os, re, subprocess, sys
+
+      def run(cmd, **kw):
+          return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+      root_dev = run(["findmnt", "-n", "-o", "SOURCE", "/"]).stdout.strip()
+      # nvme naming (nvme0n1p2: disk=nvme0n1, partition separator "p") differs
+      # from sd*/vd* naming (sda1: disk=sda, no separator) — match both.
+      m = re.match(r"^(/dev/(?:nvme\d+n\d+|[a-z]+))p?([0-9]+)$", root_dev)
+      if not m:
+          print("SKIP: unsupported root device naming: %s" % root_dev)
+          sys.exit(0)
+      disk = m.group(1)
+
+      root_num = int(m.group(2))
+
+      def part_num(name):
+          pm = re.search(r"p?([0-9]+)$", name)
+          return int(pm.group(1)) if pm else None
+
+      lsblk = run(["lsblk", "-ln", "-o", "NAME,TYPE", disk]).stdout.splitlines()
+      part_names = [l.split()[0] for l in lsblk if len(l.split()) == 2 and l.split()[1] == "part"]
+      root_name = os.path.basename(root_dev)
+      # Only partitions AFTER root (higher partition number) are candidates —
+      # a leading partition (e.g. an EFI system partition) is never touched,
+      # regardless of what it is.
+      other = [n for n in part_names if n != root_name and (part_num(n) or 0) > root_num]
+
+      if not other:
+          print("SKIP: no trailing partitions after root, nothing to reclaim")
+          sys.exit(0)
+
+      active_swaps = set()
+      with open("/proc/swaps") as f:
+          next(f, None)
+          for line in f:
+              active_swaps.add(line.split()[0])
+
+      unsafe = []
+      for n in other:
+          devpath = "/dev/%s" % n
+          fstype = run(["blkid", "-o", "value", "-s", "TYPE", devpath]).stdout.strip()
+          mounted = run(["findmnt", "-n", devpath]).stdout.strip()
+          # still active in /proc/swaps means it was not actually retired yet
+          # (e.g. workstation_remove_legacy_swap_partitions: false) — leave it alone.
+          if mounted or devpath in active_swaps or (fstype and fstype != "swap"):
+              unsafe.append("%s (fstype=%s mounted=%s active_swap=%s)" % (
+                  n, fstype or "none", bool(mounted), devpath in active_swaps))
+
+      if unsafe:
+          print("SKIP: unexpected partition(s) after root, leaving disk alone: %s" % ", ".join(unsafe))
+          sys.exit(0)
+
+      # Rewrite the table keeping every partition's line EXACTLY as sfdisk -d
+      # dumped it, except: the trailing partitions confirmed safe above are
+      # dropped, and root's own line has its explicit size= stripped so
+      # sfdisk extends it to fill the space freed by the drop. Any leading
+      # partition (e.g. an EFI system partition) is carried through
+      # unmodified — never reconstructed or reordered.
+      dump = run(["sfdisk", "-d", disk], check=True).stdout
+      lines = dump.splitlines()
+      header = [l for l in lines if l and not l.startswith(disk)]
+      drop_paths = {"/dev/%s" % n for n in other}
+      part_lines = [l for l in lines if l.startswith(disk)]
+      kept_lines = []
+      for line in part_lines:
+          dev = line.split(":")[0].strip()
+          if dev in drop_paths:
+              continue
+          if dev == root_dev:
+              line = re.sub(r",\s*size=\s*\d+", "", line)
+          kept_lines.append(line)
+      script = "\n".join(header) + "\n\n" + "\n".join(kept_lines) + "\n"
+
+      subprocess.run(["sfdisk", "--no-reread", "--force", disk], input=script, text=True, check=True)
+      subprocess.run(["partprobe", disk], check=False)
+
+      fstype = run(["findmnt", "-n", "-o", "FSTYPE", "/"]).stdout.strip()
+      if fstype in ("ext2", "ext3", "ext4"):
+          subprocess.run(["resize2fs", root_dev], check=True)
+      elif fstype == "xfs":
+          subprocess.run(["xfs_growfs", "/"], check=True)
+      else:
+          print("WARN: grew partition table but don't know how to online-resize fstype %s" % fstype)
+
+      print("CHANGED: reclaimed %s into %s (%s)" % (", ".join(other), root_dev, fstype))
+      PY
+    args:
+      executable: /bin/bash
+    register: _stationctl_grow_root
+    changed_when: "'CHANGED' in _stationctl_grow_root.stdout"
+    when: >-
+      (workstation_grow_root_fs | default(true) | bool)
+      and (workstation_remove_legacy_swap_partitions | default(true) | bool)
+    tags: [perf, swapfile]
+
+  # Disk-swap overflow tier, as a FILE not a partition. workstation_swapfile_gb
+  # defaults to 0 (disabled) — set it in group_vars/host_vars to enable. A
+  # file survives however the preseed partitioned the disk (see
+  # preseed/debian-preseed.cfg.j2's no_swap=true — the installer creates no
+  # swap partition at all now) and can be resized later without touching
+  # the partition table, unlike the swap partition this replaced on VMID 115.
+  # No dedicated "create a swapfile" module exists in ansible.builtin/
+  # community.general — fallocate + creates: guard is the standard pattern.
+  # To resize later, remove /swapfile first (this won't touch an existing one).
+  - name: Create swapfile (disk-swap overflow tier, below zram in priority)
+    ansible.builtin.command: fallocate -l {{ workstation_swapfile_gb }}G /swapfile
+    args:
+      creates: /swapfile
+    when: workstation_swapfile_gb | default(0) | int > 0
+    register: _stationctl_swapfile
+    tags: [perf, swapfile]
+
+  - name: Set swapfile permissions
+    ansible.builtin.file:
+      path: /swapfile
+      owner: root
+      group: root
+      mode: "0600"
+    when: workstation_swapfile_gb | default(0) | int > 0
+    tags: [perf, swapfile]
+
+  - name: Format swapfile (mkswap) if freshly created
+    ansible.builtin.command: mkswap /swapfile
+    when:
+      - workstation_swapfile_gb | default(0) | int > 0
+      - _stationctl_swapfile.changed
+    tags: [perf, swapfile]
+
+  - name: Ensure swapfile is in fstab
+    ansible.posix.mount:
+      path: none
+      src: /swapfile
+      fstype: swap
+      opts: sw
+      state: present
+    when: workstation_swapfile_gb | default(0) | int > 0
+    tags: [perf, swapfile]
+
+  - name: Ensure swapfile is active
+    ansible.builtin.command: swapon /swapfile
+    register: _swapon_result
+    failed_when:
+      - _swapon_result.rc != 0
+      - "'Device or resource busy' not in _swapon_result.stderr"
+    changed_when: _swapon_result.rc == 0
+    when: workstation_swapfile_gb | default(0) | int > 0
+    tags: [perf, swapfile]
+
+  - name: Set vm.swappiness via sysctl
+    ansible.posix.sysctl:
+      name: vm.swappiness
+      value: "{{ _stationctl_swappiness }}"
+      sysctl_file: /etc/sysctl.d/99-stationctl-swappiness.conf
+      state: present
+      reload: true
+    tags: [perf, sysctl]
+
+  # Kernel default (100) reclaims dentry/inode cache at roughly the same
+  # rate as page cache. Raising it biases reclaim heavily toward that
+  # cache (cheap to rebuild) instead of letting it grow — set
+  # workstation_vfs_cache_pressure per-host for the aggressive endpoints,
+  # leave at the default elsewhere.
+  - name: Set vm.vfs_cache_pressure via sysctl
+    ansible.posix.sysctl:
+      name: vm.vfs_cache_pressure
+      value: "{{ workstation_vfs_cache_pressure | default(100) }}"
+      sysctl_file: /etc/sysctl.d/99-stationctl-vfs-cache-pressure.conf
+      state: present
+      reload: true
+    tags: [perf, sysctl]
+
+  # Kernel default is auto-sized from RAM (roughly sqrt-scaled), so unlike
+  # vfs_cache_pressure there's no one sane hardcoded fallback across hosts
+  # of different sizes — leave the kernel default alone unless a host opts
+  # in with an explicit workstation_min_free_kbytes. Raising it makes kswapd
+  # (background/async reclaim) start earlier and more often instead of
+  # waiting for real pressure or direct reclaim, so — combined with
+  # swappiness=100 — anon pages get swapped out more proactively. This is a
+  # kernel-native knob, not a forced reclaim daemon (see the drop_caches
+  # timer note above and the file header for why this repo avoids those).
+  - name: Set vm.min_free_kbytes via sysctl (opt-in per host)
+    ansible.posix.sysctl:
+      name: vm.min_free_kbytes
+      value: "{{ workstation_min_free_kbytes }}"
+      sysctl_file: /etc/sysctl.d/99-stationctl-min-free-kbytes.conf
+      state: present
+      reload: true
+    when: workstation_min_free_kbytes | default(0) | int > 0
+    tags: [perf, sysctl]
+
+  # Opt-in per host via workstation_dropcaches_interval_min (host_vars) — not
+  # a global default. High swappiness alone does NOT shrink page cache (it
+  # does the opposite: it tells the kernel to prefer swapping anonymous
+  # memory over evicting cache). To also keep idle "used" RAM low, actively
+  # drop *clean* page cache on a timer. Mode 1 only (page cache), never
+  # dentries/inodes (mode 2/3) — cheap to rebuild, no data loss since it's
+  # clean cache only.
+  - name: Deploy drop_caches oneshot service
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/stationctl-dropcaches.service
+      content: |
+        [Unit]
+        Description=Proactively drop clean page cache (stationctl)
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c 'sync; echo 1 > /proc/sys/vm/drop_caches'
+      owner: root
+      group: root
+      mode: "0644"
+    when: workstation_dropcaches_interval_min | default(0) | int > 0
+    notify: Reload systemd
+    tags: [perf, cache]
+
+  - name: Deploy drop_caches timer
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/stationctl-dropcaches.timer
+      content: |
+        [Unit]
+        Description=Periodic clean page cache reclaim (stationctl)
+
+        [Timer]
+        OnBootSec={{ workstation_dropcaches_interval_min }}min
+        OnUnitActiveSec={{ workstation_dropcaches_interval_min }}min
+
+        [Install]
+        WantedBy=timers.target
+      owner: root
+      group: root
+      mode: "0644"
+    when: workstation_dropcaches_interval_min | default(0) | int > 0
+    notify: Reload systemd
+    tags: [perf, cache]
+
+  - name: Enable and start drop_caches timer
+    ansible.builtin.systemd:
+      name: stationctl-dropcaches.timer
+      state: started
+      enabled: true
+      daemon_reload: true
+    when: workstation_dropcaches_interval_min | default(0) | int > 0
+    tags: [perf, cache]
+
+  - name: Ensure drop_caches timer is disabled where not configured
+    ansible.builtin.systemd:
+      name: stationctl-dropcaches.timer
+      state: stopped
+      enabled: false
+    when: workstation_dropcaches_interval_min | default(0) | int <= 0
+    failed_when: false
+    tags: [perf, cache]
+
+  # avahi-daemon (mDNS/DNS-SD) has no reachable use case on a VNC-only
+  # remote-desktop or a single-purpose laptop workstation — it's a
+  # background service polling the network for zero benefit here. Stopping
+  # the socket unit too, not just the service, since socket activation
+  # would otherwise respawn it on the first mDNS packet.
+  #
+  # bluetooth.service used to be unconditionally in this same loop — found
+  # 2026-09-20 via --check --diff on local-workstation that it silently
+  # fights setup-mate-desktop.yml/group_vars' workstation_bluetooth_packages
+  # (bare-metal-only, deliberately enables bluetooth.service + blueman).
+  # Split out below so it's only disabled where Bluetooth was never
+  # intentionally turned on in the first place (VMs — no real radio).
+  - name: Disable unneeded services if present (best-effort, ignore missing)
+    ansible.builtin.systemd:
+      name: "{{ item }}"
+      enabled: false
+      state: stopped
+    loop:
+      - cups.service
+      - ModemManager.service
+      - avahi-daemon.service
+      - avahi-daemon.socket
+    failed_when: false
+    tags: [perf, services]
+
+  - name: Disable bluetooth.service where no Bluetooth hardware is configured (VMs)
+    ansible.builtin.systemd:
+      name: bluetooth.service
+      enabled: false
+      state: stopped
+    when: machine_role | default('vm') != 'bare-metal'
+    failed_when: false
+    tags: [perf, services]
+
+  - name: Print performance tuning summary
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "Performance tuning applied on: {{ inventory_hostname }}"
+      - "  Detected:    {{ ansible_processor_vcpus | default('?') }} vCPU / {{ ansible_memtotal_mb }} MB RAM"
+      - "  zram:        {{ _stationctl_zram_percent }}% of RAM, {{ _stationctl_zram_algo }}"
+      - "  swappiness:  {{ _stationctl_swappiness }}"
+      - "  vfs_cache_pressure: {{ workstation_vfs_cache_pressure | default(100) }}"
+      - >-
+        {{ "  min_free_kbytes: %dKB (kswapd reclaims/swaps earlier)" | format(workstation_min_free_kbytes | int)
+           if (workstation_min_free_kbytes | default(0) | int > 0) else "  min_free_kbytes: kernel default" }}
+      - >-
+        {{ "  swapfile:    %dGB at /swapfile" | format(workstation_swapfile_gb | int)
+           if (workstation_swapfile_gb | default(0) | int > 0) else "  swapfile:    disabled" }}
+      - >-
+        {{ "  legacy swap: removed " + (_stationctl_legacy_swap.stdout_lines | join(', '))
+           if (_stationctl_legacy_swap.stdout_lines | default([]) | length > 0) else "  legacy swap: none found" }}
+      - "  root fs:     {{ _stationctl_grow_root.stdout_lines[-1] | default('not evaluated') }}"
+      - >-
+        {{ "  drop_caches: every %dmin (page cache only)" | format(workstation_dropcaches_interval_min | int)
+           if (workstation_dropcaches_interval_min | default(0) | int > 0) else "  drop_caches: disabled" }}
+      - "  Sizing:      change vCPU/RAM in ansible-proxmox/group_vars/all/vms.yml (vm-debian-workstation-01), not here"
+      - "========================================================"
+    tags: [perf, summary]
+
+  handlers:
+  - name: Restart zramswap
+    ansible.builtin.systemd:
+      name: zramswap
+      state: restarted
+      daemon_reload: true
+
+  - name: Reload systemd
+    ansible.builtin.systemd:
+      daemon_reload: true

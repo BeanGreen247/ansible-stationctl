@@ -1,0 +1,572 @@
+# setup-dev-tools.yml
+#
+# Overview
+#   Installs the day-to-day development tool set (trimmed from the reference
+#   machine's actual installed-tool audit — git, build tools, Docker, Python,
+#   Node.js, GitHub CLI). Skips anything desktop/XFCE-specific that isn't
+#   relevant to a MATE workstation.
+#
+# Target hosts
+#   ansible-playbook setup-dev-tools.yml --limit workstations
+#
+# Credit: Thomas Mozdren
+---
+- name: Install development tools
+  hosts: workstations
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  # Debian 13's own `nodejs` package is v20 — too old for
+  # @anthropic-ai/claude-code (requires >=22) and other modern npm
+  # tooling. NodeSource's repo (same signed-by pattern as Brave in
+  # setup-mate-desktop.yml) gets an actually-current Node instead.
+  - name: Ensure /etc/apt/keyrings exists (for NodeSource's signed-by repo)
+    ansible.builtin.file:
+      path: /etc/apt/keyrings
+      state: directory
+      mode: "0755"
+    tags: [dev, nodejs]
+
+  - name: Add NodeSource apt signing key
+    ansible.builtin.get_url:
+      url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+      dest: /etc/apt/keyrings/nodesource.gpg
+      mode: "0644"
+    tags: [dev, nodejs]
+
+  - name: Add NodeSource apt repository for Node version {{ nodejs_major_version | default(22) ~ '.x' }}
+    ansible.builtin.apt_repository:
+      repo: "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_{{ nodejs_major_version | default(22) }}.x nodistro main"
+      filename: nodesource
+      state: present
+      update_cache: true
+    tags: [dev, nodejs]
+
+  # `state: present` on the general dev_packages install below won't swap
+  # an already-installed nodejs to NodeSource's version once apt already
+  # considers "present" satisfied by Debian's stock v20 — force it here.
+  - name: Ensure nodejs is upgraded to the NodeSource version
+    ansible.builtin.apt:
+      name: nodejs
+      state: latest
+    tags: [dev, nodejs]
+
+  # Debian's repos don't carry the .NET SDK — Microsoft's own apt repo does.
+  # Needed to build .NET projects (e.g. jellyfin-storage-manager, net9.0)
+  # locally. Using Microsoft's own packages-microsoft-prod.deb (their
+  # documented install method) rather than hand-building the repo entry —
+  # the actual signing key on this repo (a 2023 "General GPG Signer" key)
+  # differs from the well-known microsoft.asc release key, and this .deb
+  # is the canonical source for the correct one.
+  - name: Download packages-microsoft-prod.deb
+    ansible.builtin.get_url:
+      url: "https://packages.microsoft.com/config/debian/{{ ansible_distribution_major_version }}/packages-microsoft-prod.deb"
+      dest: /tmp/packages-microsoft-prod.deb
+      mode: "0644"
+    tags: [dev, dotnet]
+
+  - name: Install Microsoft apt repository + keyring (.NET SDK)
+    ansible.builtin.apt:
+      deb: /tmp/packages-microsoft-prod.deb
+    register: _ms_repo
+    tags: [dev, dotnet]
+
+  # update_cache on the `deb:` install above isn't honored (it only applies
+  # to name-based installs), and the dev_packages task below has its own
+  # cache_valid_time that can otherwise treat a stale cache as fresh right
+  # after this repo file lands — always force a real update here regardless
+  # of _ms_repo.changed so dotnet-sdk-9.0 is visible to apt afterward.
+  - name: Update APT cache after adding Microsoft's repo
+    ansible.builtin.apt:
+      update_cache: true
+    # A deliberate forced refresh, not itself a config-drift signal —
+    # without this, the apt module always reports changed=true here since
+    # it has no package name to compare against (found via the
+    # idempotency-check wrapper, 2026-09-19).
+    changed_when: false
+    tags: [dev, dotnet]
+
+  # VS Code's own repo is signed with Microsoft's classic release key
+  # (the well-known microsoft.asc, NOT the newer key the .NET repo above
+  # uses — verified: `gpg --verify` on the repo's InRelease reports key
+  # EB3E94ADBE1229CF, matching microsoft.asc, not the .NET repo's
+  # EE4D7792F748182B). Same signed-by pattern as NodeSource/Brave.
+  - name: Add Microsoft VS Code apt signing key
+    ansible.builtin.get_url:
+      url: https://packages.microsoft.com/keys/microsoft.asc
+      dest: /etc/apt/keyrings/microsoft.gpg
+      mode: "0644"
+    tags: [dev, vscode]
+
+  - name: Add Microsoft VS Code apt repository
+    ansible.builtin.apt_repository:
+      repo: "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main"
+      filename: vscode
+      state: present
+      update_cache: true
+    tags: [dev, vscode]
+
+  - name: Install VS Code
+    ansible.builtin.apt:
+      name: code
+      state: present
+    tags: [dev, vscode]
+
+  # Machine-level policy (VS Code 1.106+, /etc/vscode/policy.json) — added
+  # 2026-09-20 after Settings Sync was found to have silently dropped
+  # chat.disableAIFeatures between the two workstations' then-separate
+  # accounts (each user had their own GitHub-account-scoped sync, so
+  # nothing ever actually propagated between them). Per VS Code's own
+  # enterprise-policy docs, a policy value "overrides the VS Code setting
+  # value configured at any level (default, user, and workspace)" — root-
+  # owned, outside the end user's home dir entirely, so it can't drift via
+  # Settings Sync, a signed-in-account swap, or a per-user settings.json
+  # edit the way the earlier fix could. This is now the primary AI/
+  # telemetry lockdown; the end user's own settings.json (Settings-Sync-
+  # owned, untouched here) still carries the granular chat.*/
+  # github.copilot.* behavior toggles on top for defense in depth.
+  - name: Ensure /etc/vscode directory exists
+    ansible.builtin.file:
+      path: /etc/vscode
+      state: directory
+      owner: root
+      group: root
+      mode: "0755"
+    tags: [dev, vscode]
+
+  - name: Deploy machine-level VS Code policy (AI features + telemetry off)
+    ansible.builtin.template:
+      src: templates/vscode-policy.json.j2
+      dest: /etc/vscode/policy.json
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [dev, vscode]
+
+  # VS Code Settings Sync stores its OAuth refresh token via libsecret,
+  # which needs a working Secret Service provider — confirmed missing
+  # entirely on the VM (gnome-keyring wasn't installed at all). Installing
+  # it fixes that baseline gap, but doesn't fully solve sync sign-outs by
+  # itself: gnome-keyring's auto-unlock (libpam-gnome-keyring, already
+  # wired into lightdm's PAM stack) only fires on a real PAM login event.
+  # remote-workstation's VNC session is started by tigervncserver@.service
+  # directly, with no PAM login in the path at all, so the keyring would
+  # stay locked there regardless. Per VS Code's own Settings Sync
+  # troubleshooting docs (docs/configure/settings-sync#_troubleshooting-
+  # keychain-issues), the documented fix for exactly this class of problem
+  # is to bypass the OS keyring dependency entirely via
+  # password-store=basic — applied fleet-wide below rather than only on
+  # the VM, since local-workstation's lightdm-PAM path being structurally
+  # correct doesn't guarantee the keyring's stored unlock password still
+  # matches bean's current login password (no way to verify that without
+  # bean testing an actual sign-in).
+  - name: Install gnome-keyring (Secret Service provider for VS Code, etc.)
+    ansible.builtin.apt:
+      name:
+        - gnome-keyring
+        - libpam-gnome-keyring
+      state: present
+    tags: [dev, vscode]
+
+  - name: Ensure end-user's ~/.config/Code directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/Code"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  - name: Set VS Code to use basic password-store (Settings Sync keyring workaround)
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/Code/argv.json"
+      content: |
+        // This file has been auto-generated by ansible-stationctl (setup-dev-tools.yml).
+        // See: https://code.visualstudio.com/docs/configure/settings-sync#_troubleshooting-keychain-issues
+        {
+            "password-store": "basic"
+        }
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  # VS Code ships a built-in "Agents" profile (~/.config/Code/User/profiles/
+  # builtin/agents) tied to the Chat/Agents feature we disable everywhere via
+  # chat.disableAIFeatures. Confirmed on 2026-09-18 that removing both the
+  # directory and its userDataProfiles entry in globalStorage/storage.json is
+  # permanent — VS Code does not recreate it on next launch once the Agents
+  # feature is disabled. Both steps are safe/idempotent on a fresh host where
+  # neither has been created yet (file/module no-op when the target is
+  # already absent).
+  - name: Remove VS Code's built-in Agents profile directory
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/profiles/builtin"
+      state: absent
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  - name: Check whether globalStorage/storage.json exists yet
+    ansible.builtin.stat:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/globalStorage/storage.json"
+    register: _vscode_storage_json
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  - name: Check whether storage.json still references the Agents profile
+    ansible.builtin.command:
+      cmd: grep -q '"builtin/agents"' "/home/{{ vm_enduser_name }}/.config/Code/User/globalStorage/storage.json"
+    register: _agents_profile_present
+    changed_when: false
+    failed_when: false
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _vscode_storage_json.stat.exists
+    tags: [dev, vscode]
+
+  # Expression-only Python (no for/if blocks) so it survives being passed as
+  # a single argv entry without YAML folding mangling indentation — that's
+  # what broke the first version of this task (block-scalar folding
+  # collapsed the for-loop's newlines into spaces, breaking Python syntax).
+  - name: Strip the Agents profile entry from globalStorage/storage.json
+    ansible.builtin.command:
+      argv:
+        - python3
+        - -c
+        - |
+          import json
+          path = '/home/{{ vm_enduser_name }}/.config/Code/User/globalStorage/storage.json'
+          d = json.load(open(path))
+          d['userDataProfiles'] = [p for p in d.get('userDataProfiles', []) if p.get('location') != 'builtin/agents']
+          assoc = d.get('profileAssociations', {}).get('workspaces', {})
+          [assoc.__setitem__(k, '__default__profile__') for k, v in list(assoc.items()) if v == 'builtin/agents']
+          json.dump(d, open(path, 'w'), indent=4)
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _vscode_storage_json.stat.exists
+      - _agents_profile_present.rc == 0
+    tags: [dev, vscode]
+
+  # settings.json and installed extensions are deliberately NOT managed here
+  # (no seed content, no lineinfile/blockinfile patches, no extension
+  # installs). Both are owned by VS Code Settings Sync against the end
+  # user's own GitHub account instead — Copilot/AI-tool blocking
+  # (extensions.allowed), Todo-Tree's ripgrep path, etc. all live in the
+  # synced settings.json itself and propagate to every machine on that
+  # account on their own. Re-running this playbook must not fight that: it
+  # only touches argv.json (below), which Settings Sync does not cover.
+  #
+  # ONE deliberate exception, added 2026-09-20: chat.disableAIFeatures.
+  # Found live that local-workstation's synced settings.json carried every
+  # granular github.copilot.*/chat.* toggle (dozens of them) but was
+  # missing this one key — the actual master switch that hides the
+  # Chat/Copilot UI surface entirely (activity bar icon, command palette
+  # entries, inline chat). The granular toggles only neuter behavior of an
+  # already-visible surface; without this key the icons/menus stay visible
+  # regardless. remote-workstation had it, local-workstation didn't — pure
+  # Settings Sync drift between the two, undetectable without diffing both
+  # machines by hand. Enforced idempotently below (checked before
+  # inserting, so it's a no-op once present) rather than left to sync
+  # alone, since sync already proved it can silently drop this specific
+  # key. Every other setting stays exclusively Settings Sync's, as above.
+  - name: Check whether settings.json exists yet
+    ansible.builtin.stat:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
+    register: _vscode_settings_json
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, vscode]
+
+  - name: Enforce chat.disableAIFeatures in settings.json (Settings Sync drift guard)
+    ansible.builtin.lineinfile:
+      path: "/home/{{ vm_enduser_name }}/.config/Code/User/settings.json"
+      regexp: '^\s*"chat\.disableAIFeatures"\s*:'
+      insertafter: '^\{$'
+      line: '  "chat.disableAIFeatures": true,'
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _vscode_settings_json.stat.exists
+    tags: [dev, vscode]
+
+  - name: Install dev tool packages
+    ansible.builtin.apt:
+      name: "{{ dev_packages }}"
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [dev, packages]
+
+  # Installed fleet-wide, not just where the framework is cloned today — see
+  # the package list's own comment in group_vars/workstations.yml for why
+  # this is pre-seeded instead of left to compile.sh's own self-provisioning.
+  - name: Install Armbian Build Framework host dependencies
+    ansible.builtin.apt:
+      name: "{{ armbian_build_framework_packages }}"
+      state: present
+    tags: [dev, packages, armbian]
+
+  # mise (jdx/mise) — polyglot version manager (Python/Node/Ruby/Go/etc).
+  # bean already uses this personally (found in their own ~/.local/bin and
+  # .bashrc from before stationctl existed) — this makes it fleet-standard
+  # instead of a one-off. Official apt repo, same signed-by pattern as
+  # NodeSource/VS Code/.NET above.
+  - name: Add mise apt signing key
+    ansible.builtin.get_url:
+      url: https://mise.jdx.dev/gpg-key.pub
+      dest: /etc/apt/keyrings/mise.gpg
+      mode: "0644"
+    tags: [dev, mise]
+
+  - name: Add mise apt repository
+    ansible.builtin.apt_repository:
+      repo: "deb [signed-by=/etc/apt/keyrings/mise.gpg arch=amd64] https://mise.jdx.dev/deb stable main"
+      filename: mise
+      state: present
+      update_cache: true
+    tags: [dev, mise]
+
+  # Trivy — container/IaC vulnerability scanner (already referenced as an
+  # apt-repo tool in the user's own kubuntu-setup reference project).
+  # Official apt repo, published per Debian codename (confirmed "trixie" is
+  # covered, not just Ubuntu suites).
+  - name: Add Trivy apt signing key
+    ansible.builtin.get_url:
+      url: https://aquasecurity.github.io/trivy-repo/deb/public.key
+      dest: /etc/apt/keyrings/trivy.gpg
+      mode: "0644"
+    tags: [dev, trivy]
+
+  - name: Add Trivy apt repository
+    ansible.builtin.apt_repository:
+      repo: "deb [signed-by=/etc/apt/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb {{ ansible_distribution_release }} main"
+      filename: trivy
+      state: present
+      update_cache: true
+    tags: [dev, trivy]
+
+  - name: Install mise and Trivy
+    ansible.builtin.apt:
+      name:
+        - mise
+        - trivy
+      state: present
+    tags: [dev, mise, trivy]
+
+  - name: Install sysadmin/dev CLI toolkit (curated from kubuntu-setup)
+    ansible.builtin.apt:
+      name: "{{ sysadmin_cli_packages }}"
+      state: present
+    when: sysadmin_cli_packages | default([]) | length > 0
+    tags: [dev, packages, cli-tools]
+
+  # python3-argcomplete (a real dependency of ansible-core/yq/pipx, not
+  # something to remove) ships a global bash-completion hook at
+  # /etc/bash_completion.d/global-python-argcomplete that registers itself
+  # as the DEFAULT completion handler (`complete -D`) for every command —
+  # not just argparse-based Python scripts. That silently breaks tab
+  # completion for everything else on the system that relies on
+  # bash-completion's own dynamic per-command loader (confirmed: even
+  # stock `git`/`systemctl` completion stopped working, not just the tools
+  # added today) — found 2026-09-18 while checking why none of today's new
+  # tools would tab-complete. Neutralize the global hook, not the package;
+  # argcomplete's actual per-command completion (e.g. for ansible-playbook)
+  # is unaffected since that's registered separately, per-command, by
+  # whatever explicitly opts into it.
+  - name: Disable python3-argcomplete's global bash-completion hook
+    ansible.builtin.copy:
+      dest: /etc/bash_completion.d/global-python-argcomplete
+      content: |
+        # Disabled by ansible-stationctl (setup-dev-tools.yml) — this file's
+        # original content registered python-argcomplete as the DEFAULT
+        # bash-completion handler for every command, which broke normal
+        # tab-completion (git, systemctl, and any newly-installed CLI tool)
+        # system-wide. The ansible CLI suite's own completion (which DID rely
+        # on this global hook, and so broke along with everything else) is
+        # restored properly below instead, via explicit per-command
+        # registration — see "Generate static bash-completion registrations
+        # for the ansible CLI suite".
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [dev, packages, cli-tools, bash-completion]
+
+  # Python/argparse-based CLIs (the ansible suite here) don't ship static
+  # /usr/share/bash-completion/completions/<cmd> files like git/mise/trivy
+  # do — they rely entirely on python-argcomplete, either via the global
+  # hook just disabled above (which broke everything else) or explicit
+  # per-command registration (the officially-supported, non-global way —
+  # this is literally what Ansible's own docs recommend:
+  # `eval "$(register-python-argcomplete ansible-playbook)"`). Generated
+  # once at provision time rather than re-run at every shell startup —
+  # running `register-python-argcomplete` (spawns a Python interpreter) ~10
+  # times on every new terminal would be real, noticeable latency; a static
+  # file only goes stale if ansible-core's own argument parser changes
+  # between upgrades, an acceptable trade-off. Delete the file and re-run
+  # this task if that ever needs a refresh.
+  - name: Generate static bash-completion registrations for the ansible CLI suite
+    ansible.builtin.shell: |
+      set -e
+      for cmd in ansible ansible-config ansible-console ansible-doc ansible-galaxy \
+                 ansible-inventory ansible-playbook ansible-pull ansible-test ansible-vault; do
+        register-python-argcomplete --shell bash "$cmd"
+        echo
+      done > /etc/bash_completion.d/ansible-argcomplete
+    args:
+      executable: /bin/bash
+      creates: /etc/bash_completion.d/ansible-argcomplete
+    tags: [dev, packages, cli-tools, bash-completion]
+
+  # dive — inspect Docker image layers. Ships a real .deb release asset
+  # (unlike lazydocker below), so installed the same way as .NET/VS Code's
+  # own .deb-based installs: download + ansible.builtin.apt deb:. Pinned to
+  # a specific version rather than "latest" for reproducibility — bump
+  # dive_version by hand when a newer release is wanted.
+  - name: Download dive .deb package
+    ansible.builtin.get_url:
+      url: "https://github.com/wagoodman/dive/releases/download/v{{ dive_version | default('0.13.1') }}/dive_{{ dive_version | default('0.13.1') }}_linux_amd64.deb"
+      dest: "/tmp/dive_{{ dive_version | default('0.13.1') }}_linux_amd64.deb"
+      mode: "0644"
+    tags: [dev, dive]
+
+  - name: Install dive
+    ansible.builtin.apt:
+      deb: "/tmp/dive_{{ dive_version | default('0.13.1') }}_linux_amd64.deb"
+    tags: [dev, dive]
+
+  # lazydocker — no apt repo or .deb release, only tarballs. Pinned version,
+  # same reproducibility rationale as dive above.
+  - name: Download lazydocker tarball
+    ansible.builtin.unarchive:
+      src: "https://github.com/jesseduffield/lazydocker/releases/download/v{{ lazydocker_version | default('0.25.2') }}/lazydocker_{{ lazydocker_version | default('0.25.2') }}_Linux_x86_64.tar.gz"
+      dest: /usr/local/bin
+      remote_src: true
+      exclude:
+        - LICENSE
+        - README.md
+      mode: "0755"
+    tags: [dev, lazydocker]
+
+  # Debian ships these under their historical names to avoid clashing with
+  # older unrelated packages already using "bat"/"fd" — same fix
+  # kubuntu-setup applies.
+  - name: Symlink bat/fd to their upstream names
+    ansible.builtin.file:
+      src: "{{ item.src }}"
+      dest: "{{ item.dest }}"
+      state: link
+    loop:
+      - { src: /usr/bin/batcat, dest: /usr/local/bin/bat }
+      - { src: /usr/bin/fdfind, dest: /usr/local/bin/fd }
+    when: sysadmin_cli_packages | default([]) | length > 0
+    tags: [dev, packages, cli-tools]
+
+  # lynis/needrestart install to /usr/sbin, which isn't on a normal user's
+  # $PATH (only root/sudo's secure_path includes it) — confirmed 2026-09-18:
+  # `sudo lynis` already worked fine, but a bare `lynis` from a regular
+  # interactive shell was "command not found", not a completion issue.
+  # Symlinked the same way as bat/fd above so they're just typeable —
+  # running without sudo still works for both (reduced-capability audit by
+  # design for lynis; needrestart's own docs note the same), sudo unlocks
+  # their full functionality.
+  - name: Symlink lynis/needrestart onto a normal user's PATH
+    ansible.builtin.file:
+      src: "{{ item.src }}"
+      dest: "{{ item.dest }}"
+      state: link
+    loop:
+      - { src: /usr/sbin/lynis, dest: /usr/local/bin/lynis }
+      - { src: /usr/sbin/needrestart, dest: /usr/local/bin/needrestart }
+    when: sysadmin_cli_packages | default([]) | length > 0
+    tags: [dev, packages, cli-tools]
+
+  # --ignore-installed: some of these (fastapi -> typing-extensions, etc.)
+  # need a newer version than what an apt package (python3-dev among others)
+  # already dropped into dist-packages. Those apt-owned copies have no pip
+  # RECORD file, so pip's normal upgrade path fails trying to uninstall them
+  # first ("no RECORD file was found" / "uninstall-no-record-file"). Ignoring
+  # the already-installed version makes pip install its own copy alongside
+  # it instead of trying to remove the dpkg-owned one.
+  #
+  # KNOWN NON-IDEMPOTENT (found via the idempotency-check wrapper,
+  # 2026-09-19): --ignore-installed structurally can't be idempotent — it
+  # tells pip to skip its own "already satisfied" check, so every package
+  # here gets reinstalled on every run regardless of whether anything
+  # actually changed. Confirmed live on both hosts that
+  # python3-typing-extensions really is dpkg-owned (pulled in by
+  # python3-dev), so the underlying reason for this flag is real, not
+  # legacy — removing it outright would likely reintroduce the original
+  # crash. A real fix needs either "adopting" typing-extensions into pip's
+  # ownership once (one-off pip install of just that package) or excluding
+  # it from the apt-owned set some other way — not attempted here; see
+  # docs/TODO.md.
+  - name: Install pip tooling for the custom scripts in this workstation's home dir
+    ansible.builtin.pip:
+      name: "{{ workstation_pip_packages }}"
+      extra_args: --break-system-packages --ignore-installed
+    when: workstation_pip_packages | default([]) | length > 0
+    tags: [dev, pip]
+
+  - name: Add end-user to docker group
+    ansible.builtin.user:
+      name: "{{ vm_enduser_name }}"
+      groups: docker
+      append: true
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, docker]
+
+  # Default json-file log driver has no size cap — a long-running container
+  # (or one that's chatty on stdout/stderr) can grow its log file unbounded
+  # on a small-disk workstation, same class of problem journald was already
+  # capped for in setup-kernel-perf-tuning.yml. max-size/max-file bound it
+  # per container instead.
+  - name: Cap docker container log size (json-file driver)
+    ansible.builtin.copy:
+      dest: /etc/docker/daemon.json
+      content: |
+        {
+          "log-driver": "json-file",
+          "log-opts": {
+            "max-size": "10m",
+            "max-file": "3"
+          }
+        }
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Restart docker
+    tags: [dev, docker]
+
+  - name: Ensure docker service is enabled and running
+    ansible.builtin.service:
+      name: docker
+      state: started
+      enabled: true
+    tags: [dev, docker]
+
+  - name: Set global git identity for end-user
+    community.general.git_config:
+      name: "{{ item.key }}"
+      value: "{{ item.value }}"
+      scope: global
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    loop:
+      - { key: "user.name", value: "{{ git_user_name | default('') }}" }
+      - { key: "user.email", value: "{{ git_user_email | default('') }}" }
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - git_user_name | default('') | length > 0
+      - git_user_email | default('') | length > 0
+    tags: [dev, git]
+
+  handlers:
+  - name: Restart docker
+    ansible.builtin.systemd:
+      name: docker
+      state: restarted

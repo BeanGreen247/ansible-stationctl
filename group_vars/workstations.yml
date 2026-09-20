@@ -1,0 +1,602 @@
+# group_vars/workstations.yml
+# Shared configuration for every host in the [workstations] group.
+# Edit here once, re-run the playbooks, every workstation converges to match —
+# this file is the single source of truth for "what a stationctl workstation is".
+
+# ---------------------------------------------------------------------------
+# Resource budget — REMOVED. This used to duplicate the VM's real memory/cores,
+# which actually live in ansible-proxmox/group_vars/all/vms.yml (vm-debian-workstation-01).
+# That file is the single source of truth for CPU/RAM — change it there, not here,
+# and re-run create-vm-from-iso-proxmox.yml. Kept the two in sync by hand was the
+# actual source of confusion, so setup-performance-tuning.yml now prints the real
+# detected values (ansible_processor_vcpus / ansible_memtotal_mb) instead of a
+# separate hardcoded budget.
+# workstation_vcpu_budget: 2
+# workstation_ram_mb_budget: 4096
+
+# zram percent / algorithm / swappiness are AUTO-DETECTED from each host's
+# real ansible_memtotal_mb / ansible_processor_vcpus at run time — see the
+# tier tables in setup-performance-tuning.yml. Leave these as "auto" unless
+# you need to force a specific value for one host (set it here, or in that
+# host's host_vars/<host>/main.yml to override just one machine).
+workstation_zram_percent: "auto"
+workstation_zram_algo: "auto"
+workstation_swappiness: "auto"
+
+# ---------------------------------------------------------------------------
+# Disk layout (setup-performance-tuning.yml / setup-kernel-perf-tuning.yml)
+# workstation_drives (device name -> "ssd"/"hdd") CANNOT live here — device
+# naming is host-specific (sda vs vda vs nvme0n1) and depends on what the
+# hypervisor/controller actually exposes. It stays mandatory in each host's
+# host_vars/<host>/main.yml (setup-kernel-perf-tuning.yml asserts it's set).
+# Everything else about how a workstation's disk is treated is shared fleet
+# policy and lives here instead of being an implicit playbook default.
+# ---------------------------------------------------------------------------
+workstation_grow_root_fs: true
+workstation_remove_legacy_swap_partitions: true
+
+# CPU governor (setup-kernel-perf-tuning.yml) — AUTO-DETECTED from each
+# host's machine_role (host_vars) unless overridden here or per-host:
+#   vm         -> performance  (no battery/thermal cost to worry about)
+#   bare-metal -> schedutil    (laptop on battery — "performance" pinned
+#                               24/7 burns battery and runs hotter for a
+#                               desktop workload that isn't CPU-bound)
+# Set to an explicit governor name (performance/schedutil/powersave/...) in
+# this file or a host's host_vars/<host>/main.yml to bypass auto-detection.
+workstation_cpu_governor: "auto"
+
+# ---------------------------------------------------------------------------
+# Base tool set (setup-base-debian.yml)
+# ---------------------------------------------------------------------------
+debian_base_packages:
+  - htop
+  - vim
+  - curl
+  - wget
+  - git
+  - ca-certificates
+  - gnupg
+  - unattended-upgrades
+  - rsync
+  - unzip
+  - fontconfig
+
+# ---------------------------------------------------------------------------
+# Fonts (setup-base-debian.yml) — broad Unicode/emoji/monospace coverage so
+# terminal apps (Claude Code, btop, fastfetch, MATE terminal, etc.) never hit
+# a font that's missing a glyph and falls back to a tofu box, regardless of
+# which font a terminal profile happens to use.
+# ---------------------------------------------------------------------------
+terminal_font_packages:
+  - fonts-noto
+  - fonts-noto-core
+  - fonts-noto-extra
+  - fonts-noto-ui-core
+  - fonts-noto-ui-extra
+  - fonts-noto-mono
+  - fonts-noto-cjk
+  - fonts-noto-cjk-extra
+  - fonts-noto-color-emoji
+  - fonts-dejavu
+  - fonts-liberation
+  - fonts-liberation-sans-narrow
+  - fonts-freefont-ttf
+  - fonts-firacode
+  - fonts-hack
+  - fonts-jetbrains-mono
+  - fonts-inconsolata
+  - fonts-cascadia-code
+  - fonts-powerline
+  - fonts-font-awesome
+  - fonts-symbola
+  - fonts-unifont
+  - fonts-elusive-icons
+  - fonts-fork-awesome
+  - fonts-glyphicons-halflings
+  - fonts-material-design-icons-iconfont
+  - fonts-materialdesignicons-webfont
+  - fonts-opensymbol
+  - fonts-weather-icons
+
+# Nerd Fonts — apt only has the *unpatched* upstream fonts above (plain Fira
+# Code, Hack, JetBrains Mono, ...), not the Nerd Font variants patched with
+# extra glyphs (Powerline separators, devicons, Font Awesome, etc. all in one
+# font). Pull those straight from the upstream GitHub release since Debian
+# doesn't package them. NerdFontsSymbolsOnly is just the glyph set alone,
+# meant to fontconfig-fallback onto whatever font is actually selected, so
+# icons render even in apps not explicitly configured to use a Nerd Font.
+nerd_fonts_version: "v3.2.1"
+nerd_fonts_names:
+  - FiraCode
+  - Hack
+  - JetBrainsMono
+  - Meslo
+  - SourceCodePro
+  - UbuntuMono
+  - DejaVuSansMono
+  - Iosevka
+  - NerdFontsSymbolsOnly
+
+# ---------------------------------------------------------------------------
+# GPU / sound driver packages (setup-base-debian.yml), keyed by machine_role
+# (host_vars/<host>/main.yml) — a VM's framebuffer/audio are virtual, with
+# nothing to drive and nothing to route audio to, so "vm" stays empty. A
+# bare-metal workstation gets real packages. To onboard a new bare-metal
+# host with different hardware, add/adjust the list here — no per-host
+# playbook logic needed, machine_role: "bare-metal" is all that's required
+# in that host's host_vars.
+# ---------------------------------------------------------------------------
+workstation_gpu_packages:
+  vm: []
+  bare-metal:
+    # Intel iGPU (i915) — ThinkPad E490's UHD 620. firmware-misc-nonfree
+    # covers i915 GuC/HuC firmware; intel-media-va-driver-non-free +
+    # mesa-va-drivers give VAAPI hw video accel; libgl1-mesa-dri is the
+    # userspace OpenGL driver MATE's compositor/apps render through.
+    - firmware-misc-nonfree
+    - intel-media-va-driver-non-free
+    - mesa-va-drivers
+    - libgl1-mesa-dri
+    - vainfo
+
+workstation_sound_packages:
+  vm: []
+  bare-metal:
+    # Intel HDA (snd_hda_intel, not SOF, on the E490's Cannon Point-LP
+    # controller) — kernel driver is already built in, this is just the
+    # userspace stack MATE's volume applet/apps need.
+    - alsa-utils
+    - pulseaudio
+    - pulseaudio-utils
+    - pavucontrol
+
+# Power management — bare-metal only, same pattern as GPU/sound/bluetooth
+# above. mate-power-manager already came along implicitly as a
+# mate-desktop-environment-core dependency, but it's listed explicitly
+# here now instead of relying on that transitively — matches how every
+# other package this repo cares about is tracked. upower is what it (and
+# the battstat panel applet) actually reads charge state from.
+workstation_power_packages:
+  vm: []
+  bare-metal:
+    - mate-power-manager
+    - upower
+    # thermald was tried here 2026-09-20 and REVERTED same day: live
+    # journalctl on local-workstation showed it refuses to run at all —
+    # "[.../thinkpad_acpi/dytc_lapmode] present: Thermald can't run on
+    # this platform... Unsupported cpu model or platform". This is
+    # deliberate upstream behavior, not a bug: this ThinkPad generation's
+    # firmware exposes Lenovo's own DYTC thermal control directly to the
+    # kernel via thinkpad_acpi's dytc_lapmode, surfaced at
+    # /sys/firmware/acpi/platform_profile — thermald's whole job is
+    # redundant wherever that exists, so it self-aborts instead of
+    # fighting it. See workstation_acpi_platform_profile below (setup-
+    # kernel-perf-tuning.yml) for the actual working equivalent on this
+    # hardware. Left as a comment (not silently dropped) so this isn't
+    # re-proposed the next time someone searches "thinkpad thermal perf".
+
+# WiFi/network management — bare-metal only. The wired interface
+# (enp4s0) stays on ifupdown/interfaces (untouched — see setup-base-
+# debian.yml's install task comment for why this is safe); this is
+# purely to make the laptop's WiFi radio (wlp5s0, otherwise
+# unconfigured/DOWN) reachable through a GUI applet instead of hand-
+# editing /etc/network/interfaces for every network. remote-workstation
+# is a VM with no WiFi hardware, so "vm" stays empty.
+workstation_networkmanager_packages:
+  vm: []
+  bare-metal:
+    - network-manager
+    - network-manager-gnome
+
+# Bluetooth stack — bare-metal only. A VM has no real Bluetooth radio to
+# drive (Proxmox doesn't pass one through), so "vm" stays empty, same
+# pattern as GPU/sound above.
+workstation_bluetooth_packages:
+  vm: []
+  bare-metal:
+    - bluez                       # core stack — bluetoothd, hciconfig/bluetoothctl
+    - bluez-firmware               # firmware blobs some Bluetooth/combo-WiFi adapters need
+    - pulseaudio-module-bluetooth  # A2DP/HSP audio routing through the existing PulseAudio stack
+    - blueman                      # GTK pairing UI + MATE panel tray applet
+
+# ---------------------------------------------------------------------------
+# MATE desktop (setup-mate-desktop.yml)
+# Minimal MATE stack only — deliberately avoids task-mate-desktop, which
+# pulls in LibreOffice/games/extra applets and blows the resource budget.
+# ---------------------------------------------------------------------------
+mate_packages:
+  - mate-desktop-environment-core
+  - lightdm
+  - lightdm-gtk-greeter
+  - mate-polkit
+  - dconf-cli
+  - dbus-x11
+  - arc-theme           # placeholder dark theme for the "submarine" look — swap freely
+  - mate-applets        # for the panel's System Monitor (multiload: cpu/mem/net/swap) applet
+  - papirus-icon-theme  # actively maintained upstream, pairs with Arc-Dark
+  - mate-menu           # replaces the stock menu-bar applet — categorized/searchable app
+                         # browser (Linux Mint's MATE menu, ported upstream), favorites +
+                         # easy-uninstall; stock menu-bar has no search at all
+
+mate_gtk_theme: "Arc-Dark"
+mate_marco_theme: "Arc-Dark"
+mate_icon_theme: "Papirus-Dark"
+mate_compositing_enabled: false
+
+# System-wide monospace font — a Nerd Font *Mono* variant so terminal apps
+# get code + icon glyphs (Powerline, devicons, etc.) from a single font
+# instead of relying on fontconfig fallback picking the right glyph from a
+# separate symbols-only font (which VTE doesn't always do consistently).
+mate_monospace_font: "FiraCode Nerd Font Mono 13"
+
+# ---------------------------------------------------------------------------
+# VS Code AI/telemetry lockdown (setup-dev-tools.yml) — machine-level policy
+# (/etc/vscode/policy.json, VS Code 1.106+), NOT a Settings-Sync-owned
+# setting. Added 2026-09-20 after Settings Sync was found to have silently
+# dropped chat.disableAIFeatures between the two workstations' separate
+# accounts — a machine-level policy overrides every level (default, user,
+# workspace) per VS Code's own enterprise-policy docs, so it can't drift
+# the same way settings.json can. Single source of truth for the extension
+# blocklist, shared with the user's own settings.json extensions.allowed
+# (that one stays Settings-Sync-owned per the comment in setup-dev-tools.yml
+# — this list only feeds the policy-level enforcement, doesn't manage
+# settings.json itself).
+vscode_ai_extension_blocklist:
+  - github.copilot
+  - github.copilot-chat
+  - github.copilot-labs
+  - github.copilot-nightly
+  - tabnine.tabnine-vscode
+  - codeium.codeium
+  - codeium.windsurfpyright
+  - sourcegraph.cody-ai
+  - continue.continue
+  - supermaven.supermaven
+  - amazonwebservices.amazon-q-vscode
+  - danielsanmedium.dscodegpt
+  - blackboxapp.blackbox
+  - askcodi.askcodi
+  - genieai.chatgpt-vscode
+  - gencay.vscode-chatgpt
+  - visualstudioexptteam.vscodeintellicode
+  - visualstudioexptteam.intellicode-api-usage-examples
+  - google.geminicodeassist
+  - coderabbit.coderabbit-vscode
+  - codiumai.codiumai
+  - qodo.gen
+  - ms-windows-ai-studio.windows-ai-studio
+  - mintlify.document
+
+# ---------------------------------------------------------------------------
+# Dev tools (setup-dev-tools.yml) — trimmed to what's actually used day to day,
+# skips anything XFCE/desktop-specific from the reference machine's tool audit.
+# ---------------------------------------------------------------------------
+dev_packages:
+  - build-essential
+  - python3
+  - python3-venv
+  - python3-pip
+  - docker.io
+  - docker-cli
+  - docker-compose
+  - nodejs        # from NodeSource (setup-dev-tools.yml), NOT Debian's stock v20 package — includes npm
+  - gh
+  - ansible
+  - mousepad
+  - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
+  - idle          # provides idlelib, used by some homegrown editor scripts
+  - keepassxc
+  - filezilla     # GUI FTP/SFTP client
+  # Required by both VS Code markdown extensions' PDF/DOCX export path
+  # (shd101wyy.markdown-preview-enhanced, yzhang.markdown-all-in-one) — found
+  # missing 2026-09-18 during a full extension-dependency audit. Everything
+  # else those extensions need (Mermaid rendering, GFM styling, linting) is
+  # bundled JS with no external binary. PlantUML/Graphviz support in
+  # markdown-preview-enhanced also needs `java`+`graphviz`, left out for now
+  # since no repo content actually uses PlantUML diagrams (all diagrams here
+  # are Mermaid) — add if that changes.
+  - pandoc
+  - dotnet-sdk-9.0    # from Microsoft's apt repo (setup-dev-tools.yml) — for .NET projects (net9.0)
+  # C/C++ build essentials meson/cmake actually need to resolve dependencies —
+  # build-essential alone doesn't cover this; without pkg-config, meson/cmake
+  # can't find ANY system library via pkgconfig at all.
+  - pkg-config
+  - cmake
+  # Wayland compositor dev headers (e.g. for building a wlroots-based
+  # compositor project) — not needed for typical app dev, but cheap to have
+  # on every workstation rather than diagnosing per-project on demand.
+  - libwayland-dev
+  - wayland-protocols
+  - libwlroots-0.18-dev
+  - libinput-dev
+  - libxkbcommon-dev
+  - libpixman-1-dev
+  - libdrm-dev
+  - libegl1-mesa-dev
+  - libgles2-mesa-dev
+  - libgtk-4-dev
+  - libpipewire-0.3-dev
+  - libgtk4-layer-shell-dev
+  - libpam0g-dev
+
+# ---------------------------------------------------------------------------
+# Armbian Build Framework host deps (LukyStuff/Debian-build-server/build,
+# currently cloned on local-workstation) — installed fleet-wide like every
+# other list in this file, on the theory that any of these workstations
+# could end up building it, not just the one it happens to be cloned on
+# today.
+#
+# The framework's own compile.sh normally self-provisions these on first run
+# (prepare_host_noninteractive -> install_host_dependencies) — this list is a
+# deliberate, requested exception to have them ready ahead of time instead.
+# It's the exact "all-hosts, all-targets" default set from
+# lib/functions/host/prepare-host.sh's adaptative_prepare_host_dependencies()
+# (host_release/target_arch unset -> broadest default), with the "group::"
+# Docker-layer prefixes stripped (irrelevant outside their own Docker image
+# build) and the target/branch-conditional extras left out: python2 (only
+# for host_release bullseye/jammy), apt-cacher-ng (opt-in via MANAGE_ACNG),
+# the loongarch64 cross-toolchain (only when wanted_arch=="loong64"
+# specifically, not the "all" default), and llvm/clang (only if
+# KERNEL_COMPILER=clang). If a target build ever picks clang or a loong64
+# target, compile.sh will still self-install those specific extras on its
+# own.
+# ---------------------------------------------------------------------------
+armbian_build_framework_packages:
+  # native compiler toolchain & build essentials
+  - libc6-dev
+  - make
+  - dpkg-dev
+  - gcc
+  - ccache
+  - bison
+  - flex
+  - pkg-config
+  - libbison-dev
+  - libmpc-dev
+  - libfl-dev
+  # dev libraries & build helper tools
+  - device-tree-compiler
+  - libelf-dev
+  - libfdt-dev
+  - libncurses-dev
+  - libssl-dev
+  - libusb-1.0-0-dev
+  - swig
+  - u-boot-tools
+  - uuid-dev
+  - uuid-runtime
+  - zlib1g-dev
+  - dwarves
+  - libgnutls28-dev
+  # imaging (plymouth spinner/image conversion)
+  - imagemagick
+  # filesystem & partition tooling
+  - dosfstools
+  - e2fsprogs
+  - parted
+  - gdisk
+  - fdisk
+  # core/misc utilities
+  - binfmt-support
+  - arch-test
+  - lz4
+  - unzip
+  - zip
+  - pigz
+  - xz-utils
+  - pbzip2
+  - lzop
+  - zstd
+  - bc
+  - bsdextrautils
+  - ca-certificates
+  - cpio
+  - dialog
+  - dirmngr
+  - gawk
+  - gettext
+  - gnupg
+  - gpg
+  - jq
+  - kmod
+  - libfile-fcntllock-perl
+  - linux-base
+  - locales
+  - lsof
+  - ncurses-base
+  - ncurses-term
+  - ntpsec-ntpdate
+  - patchutils
+  - pv
+  - rsync
+  - udev
+  - file
+  - tree
+  - expect
+  - colorized-logs
+  - aria2
+  - curl
+  - axel
+  - wget
+  - parallel
+  - rdfind
+  - binwalk
+  - bash
+  - git
+  - psmisc
+  # python (Armbian's own tooling + u-boot builds)
+  - python3
+  - libpython3-dev
+  - libffi-dev
+  - python3-yaml
+  # qemu binfmt + chrooted user emulation (Debian trixie: qemu-user-static)
+  - qemu-user-static
+  # cross-compiler toolchains — "all targets" default (amd64/arm64/armhf/riscv64)
+  - gcc-x86-64-linux-gnu
+  - libc6-amd64-cross
+  - gcc-aarch64-linux-gnu
+  - gcc-arm-linux-gnueabi
+  - gcc-arm-linux-gnueabihf
+  - gcc-riscv64-linux-gnu
+  - libc6-dev-riscv64-cross
+
+# ---------------------------------------------------------------------------
+# Sysadmin/dev CLI toolkit, curated from github.com/BeanGreen247/kubuntu-setup
+# (the user's own reference desktop provisioning script) — trimmed to what's
+# actually relevant on a headless-ish MATE VM: dropped KDE-specific packages,
+# firmware/microcode (host-level, not a VM concern), media codecs, Windows
+# fonts, and GUI apps with their own apt repos (Chrome/Signal/Spotify/
+# HashiCorp) that weren't asked for. clang/meson/ninja/valgrind are here
+# specifically for the future game-port build work.
+# ---------------------------------------------------------------------------
+sysadmin_cli_packages:
+  # debugging / build
+  - gdb
+  - strace
+  - ltrace
+  - clang
+  - lldb
+  - meson
+  - ninja-build
+  - valgrind
+  - shellcheck
+  # git extras
+  - git-lfs
+  - tig
+  - git-delta   # better git diff/blame pager (syntax-highlighted, side-by-side)
+  - lazygit     # TUI git client
+  - pre-commit  # git hook framework, pairs with shellcheck/ansible-lint
+  # shell / editors
+  - nano
+  - tmux
+  - screen
+  - btop
+  - fastfetch
+  # modern CLI replacements (bat->batcat, fd->fdfind — symlinked below)
+  - tree
+  - bat
+  - fd-find
+  - ripgrep
+  - fzf
+  - zoxide
+  - duf
+  - ncdu
+  # archives
+  - jq
+  - yq          # YAML analog to jq — Debian's is the Python/jq-wrapper flavor,
+                # not mikefarah's Go yq; similar idea, slightly different syntax
+  - p7zip-full
+  - unzip
+  - unrar-free  # real "unrar" needs Debian's non-free component enabled — skip that for one package
+  - xz-utils
+  # transfer / remote
+  - rclone
+  - sshfs
+  - sshpass
+  - aria2
+  - httpie
+  # networking / diagnostics
+  - nmap
+  - ncat
+  - netcat-openbsd
+  - tcpdump
+  - traceroute
+  - mtr-tiny
+  - net-tools
+  - ipcalc
+  - socat
+  - iperf3
+  - arp-scan
+  - whois
+  - mosh
+  - bind9-dnsutils
+  - bind9-host
+  # system / hardware info
+  - lsof
+  - pciutils
+  - usbutils
+  - dmidecode
+  - lshw
+  - hwinfo
+  - inxi
+  - needrestart  # flags services needing a restart after a library upgrade
+  - lynis        # security auditing
+  # python extras
+  - python3-dev
+  - pipx
+  # misc
+  - xclip
+  - xsel
+  - pv
+  - moreutils
+  - parallel
+  - direnv      # per-project env vars from .envrc
+  - just        # modern make-alternative command runner
+  - hyperfine   # CLI benchmarking
+  - procs       # modern ps replacement
+  - age         # modern file encryption, pairs with sops-style secrets workflows
+  - glow        # render markdown in the terminal
+  - entr
+  - libnotify-bin
+
+# ---------------------------------------------------------------------------
+# Python (pip) tooling used by the custom scripts that live in this
+# workstation's home dir (ansible-proxmox-ssh-gui-tool, OptiPing, the
+# starhaven node exporter, crafty tweaks). Debian 13 is PEP 668
+# "externally managed" — installed with --break-system-packages in
+# setup-dev-tools.yml, matching how they're actually installed on Nebula.
+#
+# This list is a living baseline, not a per-app pin — as game-port build
+# work starts, add build/runtime libs here (SDL2, cmake, etc.) rather than
+# installing them ad hoc on one machine.
+# ---------------------------------------------------------------------------
+workstation_pip_packages:
+  - customtkinter
+  - fastapi
+  - "uvicorn[standard]"
+  - aiohttp
+  - ping3
+  - toml
+  - python-socketio
+  - python-multipart
+  - pyotp
+  - qrcode
+  - prometheus_client
+  - peewee
+  # Used by the redhat.ansible VS Code extension's built-in lint integration
+  # against this repo's own playbooks. Found broken on remote-workstation
+  # 2026-09-18 (manually installed, missing wcmatch/jsonschema/black/etc. —
+  # a partial/interrupted pip install, not a version issue) — ansible.builtin.pip
+  # resolves the full dependency tree correctly, unlike the ad-hoc fix, so
+  # this prevents the same breakage recurring on any other workstation.
+  - ansible-lint
+
+# ---------------------------------------------------------------------------
+# Remote access (setup-remote-access.yml)
+# ---------------------------------------------------------------------------
+remote_access_packages:
+  - tigervnc-standalone-server
+  - tigervnc-common
+  - tigervnc-tools
+vnc_display: "1"
+vnc_geometry: "1920x1080"
+vnc_depth: 16
+
+# ---------------------------------------------------------------------------
+# Dev applets (setup-dev-applets.yml) — ported from the user's kubuntu-setup
+# reference project (github.com/BeanGreen247/kubuntu-setup): apt-key-refresh,
+# dotfile-sync, and the dotfile-sync-tray/infra-connections status applets.
+# ---------------------------------------------------------------------------
+dotfile_sync_interval_hours: 12
+dotfile_sync_backup_count: 5
+
+dotfile_sync_files:
+  - name: bashrc
+    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/bashrc/bashrc
+    dest: "~/.bashrc"
+  - name: vimrc
+    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/vim/vimrc
+    dest: "~/.vimrc"
+  - name: claude-md
+    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/claude/CLAUDE.md
+    dest: "~/.claude/CLAUDE.md"
