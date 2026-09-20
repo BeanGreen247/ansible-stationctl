@@ -116,12 +116,31 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [applets]
 
+  # Check whether mate-indicator-applet-complete (part of the real logged-in
+  # MATE session, added to the panel by setup-mate-desktop.yml) is already
+  # running for the end-user — confirmed via dbus-send --session ListNames,
+  # see docs/TODO.md 2026-09-19, to already own org.kde.StatusNotifierWatcher
+  # whenever it's up. ayatana-indicator-application can't also claim an
+  # already-owned name, so unconditionally starting it below always lost that
+  # race and landed inactive/dead, with `systemd: state=started` reporting
+  # changed=true on every single playbook run.
+  - name: Check whether mate-indicator-applet-complete is running for the end-user
+    ansible.builtin.command: pgrep -u {{ vm_enduser_name }} -f mate-indicator-applet-complete
+    register: _mate_indicator_running
+    changed_when: false
+    failed_when: false
+    check_mode: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [applets]
+
   # Enabled by the package (symlinked into ayatana-indicators.target.wants)
   # but that target isn't reliably pulled in at session start on its own —
   # confirmed on a fresh post-reboot session where it stayed inactive until
   # started explicitly. Without this actually running, the tray apps launch
   # fine and never crash, but never appear anywhere either — there's no
-  # StatusNotifierWatcher on the bus for them to register with.
+  # StatusNotifierWatcher on the bus for them to register with. Only touched
+  # when mate-indicator-applet-complete isn't already providing the watcher,
+  # so this stops fighting it for the name in a real, already-running session.
   - name: Enable and start ayatana-indicator-application.service (as end-user)
     ansible.builtin.systemd:
       name: ayatana-indicator-application.service
@@ -132,7 +151,28 @@
     become_user: "{{ vm_enduser_name }}"
     environment:
       XDG_RUNTIME_DIR: "/run/user/{{ _enduser_uid.stdout }}"
-    when: vm_enduser_name | default('') | length > 0
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _mate_indicator_running.rc != 0
+    tags: [applets]
+
+  # Mirror image of the task above — mate-indicator-applet-complete is up and
+  # already owns the watcher name, so leave ayatana-indicator-application
+  # enabled (still useful at next boot, before mate-indicator-applet-complete
+  # starts and wins the race) but stop the currently-losing instance instead
+  # of leaving it spinning inactive/dead every run.
+  - name: Stop ayatana-indicator-application.service when mate-indicator-applet-complete already owns the watcher
+    ansible.builtin.systemd:
+      name: ayatana-indicator-application.service
+      scope: user
+      state: stopped
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    environment:
+      XDG_RUNTIME_DIR: "/run/user/{{ _enduser_uid.stdout }}"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _mate_indicator_running.rc == 0
     tags: [applets]
 
   # ── dotfile-sync (per end-user) ─────────────────────────────────────────────
