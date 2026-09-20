@@ -5,6 +5,40 @@ and the full non-bootstrap playbook set has now run against it end to end).
 
 ---
 
+## 2026-09-20: VS Code hardening + editor-to-editor SSH (not Ansible-tracked)
+
+Settings Sync was found to be signed into the same GitHub account on both
+hosts but had still let `chat.disableAIFeatures` drift out of sync between
+them — root-caused and fixed, plus went further since drift like this can
+recur:
+
+- Added `/etc/vscode/policy.json` (Ansible-managed, `setup-dev-tools.yml` +
+  `vscode_ai_extension_blocklist` in `group_vars/workstations.yml`) —
+  machine-level, overrides Settings Sync entirely for AI/telemetry.
+- Both hosts' `settings.json` (Settings-Sync-owned, NOT Ansible-managed —
+  edited live, propagates on its own): added `git.addAICoAuthor: off`,
+  `chat.autopilot.enabled: false`, `workbench.settings.enableNaturalLanguageSearch: false`,
+  `extensions.experimental.affinity` (isolates redhat.ansible/vscode-yaml
+  into their own extension host), `extensions.experimental.deferredStartupFinishedActivation: true`,
+  `python.experiments.enabled: false`.
+- **Uninstalled `ms-python.vscode-pylance` from both hosts** — dead weight,
+  116MB, `python.languageServer` was already set to `"Jedi"` so Pylance
+  never actually activated its language server; also dropped the inert
+  `python.analysis.*` settings that only apply to Pylance.
+- Removed leftover Pulsar artifacts on local-workstation only
+  (`~/.local/bin/pulsar`, `~/.local/share/applications/pulsar.desktop`) —
+  pre-Ansible manual leftovers that only became visible once mate-menu
+  started scanning `~/.local/share/applications`.
+- **New: bean<->kenny personal SSH trust** for editing each machine as
+  yourself instead of through the ansibleuser automation account —
+  `~/.ssh/id_ed25519_remote-workstation` (bean) / `~/.ssh/id_ed25519_local-workstation`
+  (kenny), cross-authorized, plus `Host remote-workstation`/`local-workstation`
+  aliases with ControlMaster/ControlPersist in both `~/.ssh/config`s. Lives
+  in each user's home dir, not this repo — won't survive a full reprovision
+  of either host unless folded into dotfile-sync or a new playbook task.
+
+---
+
 ## local-workstation (laptop, bean) — done this session
 
 - **Full playbook run completed and verified** (`setup-base-debian.yml`
