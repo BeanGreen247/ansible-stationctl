@@ -209,3 +209,11 @@ See [`docs/TODO.md`](TODO.md) for the current list — it's updated per-session 
 See [`docs/INVENTORY-CONSOLIDATION.md`](INVENTORY-CONSOLIDATION.md) for an open (undecided) proposal to replace this repo's and `ansible-proxmox`'s static inventory files with a live Tailscale-based lookup.
 
 See [`docs/BRAINSTORM-COMPARISON.md`](BRAINSTORM-COMPARISON.md) for a research-backed comparison against comparable public projects (community-scripts/ProxmoxVE, chezmoi, home-manager, etc.) and ranked ideas for what would make this setup distinctive — prep work for a future website writeup, not yet acted on.
+
+## Support
+
+If this project is useful to you, consider supporting its development via PayPal:
+
+[![Donate with PayPal](../.github/paypal-qr.png)](https://paypal.me/beangreen2471)
+
+**PayPal:** https://paypal.me/beangreen2471
