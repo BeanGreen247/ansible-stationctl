@@ -110,6 +110,26 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [remote-access, vnc]
 
+  # Found 2026-09-20 on local-workstation: a VNC login and a physical seat0
+  # login for the same user both land on the systemd-activated user bus
+  # (/run/user/<uid>/bus) — confirmed via /proc/<pid>/environ on both
+  # mate-session processes, both showing the identical
+  # DBUS_SESSION_BUS_ADDRESS. Whichever mate-session starts second loses the
+  # race to claim org.gnome.SessionManager on that shared bus
+  # ("WARNING: Failed to acquire org.gnome.SessionManager" in journalctl).
+  # The packaged /etc/X11/Xtigervnc-session (dpkg conffile, not something
+  # of ours) hands off straight to /etc/X11/Xsession on that shared bus.
+  # Wrapping that handoff in dbus-run-session gives the VNC session its own
+  # private bus, so it no longer contends with a concurrent physical login
+  # (or a second VNC display) for the same well-known names.
+  - name: Give the VNC X session its own private D-Bus session bus (avoid clashing with a physical login)
+    ansible.builtin.replace:
+      path: /etc/X11/Xtigervnc-session
+      regexp: '^exec /etc/X11/Xsession "\$@"$'
+      replace: 'exec dbus-run-session -- /etc/X11/Xsession "$@"'
+    notify: Restart VNC server
+    tags: [remote-access, vnc]
+
   # No `creates:` guard here on purpose: this file can get silently
   # replaced by something else with the same name (e.g. a stray home-dir
   # sync from another machine) — a `creates:` guard would then leave the
