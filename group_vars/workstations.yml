@@ -201,6 +201,9 @@ mate_packages:
   - arc-theme           # placeholder dark theme for the "submarine" look — swap freely
   - mate-applets        # for the panel's System Monitor (multiload: cpu/mem/net/swap) applet
   - papirus-icon-theme  # actively maintained upstream, pairs with Arc-Dark
+  - mate-menu           # replaces the stock menu-bar applet — categorized/searchable app
+                         # browser (Linux Mint's MATE menu, ported upstream), favorites +
+                         # easy-uninstall; stock menu-bar has no search at all
 
 mate_gtk_theme: "Arc-Dark"
 mate_marco_theme: "Arc-Dark"

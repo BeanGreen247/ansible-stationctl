@@ -138,6 +138,43 @@
     when: vm_enduser_name | default('') | length > 0
     tags: [remote-access, vnc]
 
+  # Found 2026-09-20: the packaged tigervncsession-start (used by
+  # tigervncserver@.service — see this file's header, NOT the legacy
+  # `vncserver` Perl wrapper) reads the password straight from the XDG
+  # path ~/.config/tigervnc/passwd and does NOT do the ~/.vnc ->
+  # ~/.config/tigervnc migration copy itself; only the legacy `vncserver`
+  # command does that mv. A host whose password was ever set without that
+  # legacy command running first (local-workstation, set 2026-09-19) ends
+  # up with only ~/.vnc/passwd, so Xtigervnc finds no password file, falls
+  # back to an interactive prompt on a non-interactive service TTY, and
+  # dies with "getpassword error: Inappropriate ioctl for device" —
+  # confirmed live via journalctl + the session log in
+  # ~/.local/state/tigervnc/. remote-workstation happened to already have
+  # both copies (from an earlier manual `vncserver` run) so it never hit
+  # this. Copy unconditionally (same rationale as the no-`creates:`-guard
+  # note above) so both paths always agree.
+  - name: Ensure XDG tigervnc config directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/tigervnc"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0700"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [remote-access, vnc]
+
+  - name: Mirror VNC password to the XDG path tigervncsession-start actually reads
+    ansible.builtin.copy:
+      src: "/home/{{ vm_enduser_name }}/.vnc/passwd"
+      dest: "/home/{{ vm_enduser_name }}/.config/tigervnc/passwd"
+      remote_src: true
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0600"
+    when: vm_enduser_name | default('') | length > 0
+    notify: Restart VNC server
+    tags: [remote-access, vnc]
+
   - name: Remove old stationctl-vncserver custom unit if present (superseded)
     ansible.builtin.systemd:
       name: "stationctl-vncserver@{{ vnc_display }}"

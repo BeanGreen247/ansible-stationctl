@@ -443,17 +443,32 @@
   # background service polling the network for zero benefit here. Stopping
   # the socket unit too, not just the service, since socket activation
   # would otherwise respawn it on the first mDNS packet.
+  #
+  # bluetooth.service used to be unconditionally in this same loop — found
+  # 2026-09-20 via --check --diff on local-workstation that it silently
+  # fights setup-mate-desktop.yml/group_vars' workstation_bluetooth_packages
+  # (bare-metal-only, deliberately enables bluetooth.service + blueman).
+  # Split out below so it's only disabled where Bluetooth was never
+  # intentionally turned on in the first place (VMs — no real radio).
   - name: Disable unneeded services if present (best-effort, ignore missing)
     ansible.builtin.systemd:
       name: "{{ item }}"
       enabled: false
       state: stopped
     loop:
-      - bluetooth.service
       - cups.service
       - ModemManager.service
       - avahi-daemon.service
       - avahi-daemon.socket
+    failed_when: false
+    tags: [perf, services]
+
+  - name: Disable bluetooth.service where no Bluetooth hardware is configured (VMs)
+    ansible.builtin.systemd:
+      name: bluetooth.service
+      enabled: false
+      state: stopped
+    when: machine_role | default('vm') != 'bare-metal'
     failed_when: false
     tags: [perf, services]
 

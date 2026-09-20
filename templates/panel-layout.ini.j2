@@ -1,6 +1,6 @@
 [org/mate/panel/general]
 toplevel-id-list=['bottom']
-object-id-list=['menu-bar', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor', 'clock']
+object-id-list=['mate-menu', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor', 'clock']
 # Per-object locked=true (below) only blocks dragging/moving — it does
 # NOT block "Remove From Panel" from the right-click menu, which is
 # exactly how notification-area got dropped from object-id-list above
@@ -26,8 +26,13 @@ size=28
 auto-hide=false
 expand=true
 
-[org/mate/panel/objects/menu-bar]
-object-type='menu-bar'
+# mate-menu (Advanced MATE Menu, Linux Mint's port) replaces the stock
+# 'menu-bar' object-type — the stock menu has no search/filter at all and
+# no favorites; mate-menu adds both plus one-click uninstall, at the cost
+# of one extra package (python3-based, negligible RAM on these boxes).
+[org/mate/panel/objects/mate-menu]
+object-type='applet'
+applet-iid='MateMenuAppletFactory::MateMenuApplet'
 toplevel-id='bottom'
 position=0
 panel-right-stick=false

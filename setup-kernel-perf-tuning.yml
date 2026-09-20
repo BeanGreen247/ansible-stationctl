@@ -415,6 +415,35 @@
     failed_when: false
     tags: [kperf, services]
 
+  # fstrim.timer (util-linux, ships with base Debian — no extra package)
+  # runs a weekly discard pass over mounted filesystems that support it.
+  # Was referenced in the comment above ("preload and fstrim below") but
+  # never actually implemented — found 2026-09-20 doing a tweaks audit.
+  # Continuous/mount-time discard (`discard` mount option) isn't used here
+  # on purpose: it issues a TRIM on every single delete, which is real
+  # per-operation latency on some SSD/NVMe controllers — the periodic
+  # batched timer is the generally-recommended default instead. Gated on
+  # _stationctl_has_ssd (not "not hdd") since a host could plausibly have
+  # neither key set to ssd; systemd's own fstrim.service silently no-ops
+  # on any filesystem/device that doesn't actually support discard, so
+  # this is harmless to enable even if a listed "ssd" turns out not to.
+  - name: Enable weekly fstrim timer (SSD/NVMe hosts)
+    ansible.builtin.systemd:
+      name: fstrim.timer
+      state: started
+      enabled: true
+    when: _stationctl_has_ssd
+    tags: [kperf, services, ssd]
+
+  - name: Ensure fstrim timer is disabled on all-HDD hosts (no discard benefit)
+    ansible.builtin.systemd:
+      name: fstrim.timer
+      state: stopped
+      enabled: false
+    when: not _stationctl_has_ssd
+    failed_when: false
+    tags: [kperf, services, ssd]
+
   # earlyoom: kill the actual runaway process at low-memory before the box
   # grinds into unresponsive swap-thrash — a good complement to the
   # swap-heavy policy in setup-performance-tuning.yml (that policy makes
@@ -479,6 +508,7 @@
       - "  TCP: bbr + fq"
       - "  IO scheduler: bfq (rotational) / none (non-rotational), via udev"
       - "  irqbalance/preload: enabled"
+      - "  fstrim.timer: {{ 'enabled (weekly)' if _stationctl_has_ssd else 'disabled (no SSD/NVMe)' }}"
       - "  earlyoom: enabled, systemd-oomd: disabled"
       - "========================================================"
     tags: [kperf, summary]
