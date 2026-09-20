@@ -85,20 +85,48 @@
            else ('performance' if (machine_role | default('vm') == 'vm') else 'schedutil') }}
     tags: [kperf, cpu]
 
+  # Found 2026-09-20 live on local-workstation: this service has been
+  # silently doing nothing since day one there. intel_pstate in its
+  # default *active* mode (the case on this CPU — confirmed via
+  # `cat .../cpufreq/scaling_driver` = intel_pstate, NOT intel_cpufreq)
+  # only ever exposes two scaling_governor values, "performance" and
+  # "powersave" — "schedutil" requires passive mode
+  # (`intel_pstate=passive`), a bigger change this repo isn't making
+  # (active+HWP autonomous scaling generally outperforms passive+schedutil
+  # on modern Intel silicon anyway). The `|| true` below meant the write
+  # failing with EINVAL was never surfaced — `scaling_governor` silently
+  # stayed on whatever it booted with instead of converging.
+  #
+  # The actual correct lever under intel_pstate active mode is
+  # energy_performance_preference (EPP) — write that too, alongside the
+  # scaling_governor attempt (still needed as-is for VMs/older CPUs on
+  # acpi-cpufreq, where schedutil genuinely is a valid governor). Mapped
+  # 1:1 from the resolved governor intent so "auto" behavior is unchanged:
+  # performance->performance, schedutil->balance_performance (closest EPP
+  # analog — HWP-driven, biased toward responsiveness over idle power),
+  # powersave->power.
+  #
   # QEMU/KVM guests often don't expose cpufreq at all (host controls real
   # frequency scaling) — this is a best-effort oneshot, never fails the play
   # when there's no cpufreq sysfs to write to.
-  - name: Force resolved CPU governor via oneshot service
+  - name: Resolve energy_performance_preference for intel_pstate active-mode hosts
+    ansible.builtin.set_fact:
+      _stationctl_cpu_epp: >-
+        {{ {'performance': 'performance', 'schedutil': 'balance_performance', 'powersave': 'power'}[_stationctl_cpu_governor]
+           | default('balance_performance') }}
+    tags: [kperf, cpu]
+
+  - name: Force resolved CPU governor/EPP via oneshot service
     ansible.builtin.copy:
       dest: /etc/systemd/system/stationctl-cpu-performance.service
       content: |
         [Unit]
-        Description=Force {{ _stationctl_cpu_governor }} CPU governor (stationctl)
+        Description=Force {{ _stationctl_cpu_governor }} CPU governor / {{ _stationctl_cpu_epp }} EPP (stationctl)
         ConditionPathExists=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 
         [Service]
         Type=oneshot
-        ExecStart=/bin/sh -c 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo {{ _stationctl_cpu_governor }} > "$f" 2>/dev/null || true; done'
+        ExecStart=/bin/sh -c 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo {{ _stationctl_cpu_governor }} > "$f" 2>/dev/null || true; done; for f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do echo {{ _stationctl_cpu_epp }} > "$f" 2>/dev/null || true; done'
         RemainAfterExit=true
 
         [Install]
@@ -389,6 +417,40 @@
       enabled: true
     tags: [kperf, services]
 
+  # thermald was tried here 2026-09-20 and reverted the same day — see the
+  # comment in group_vars/workstations.yml's workstation_power_packages for
+  # why. Genuine working equivalent on this ThinkPad generation: the
+  # kernel's own /sys/firmware/acpi/platform_profile (thinkpad_acpi's
+  # DYTC integration), one of low-power/balanced/performance. Same
+  # best-effort oneshot shape as the CPU governor/EPP task above — no-op
+  # (ConditionPathExists) on hardware/VMs that don't expose it at all.
+  - name: Resolve ACPI platform_profile (manual override or default)
+    ansible.builtin.set_fact:
+      _stationctl_platform_profile: "{{ workstation_acpi_platform_profile | default('performance') }}"
+    tags: [kperf, cpu]
+
+  - name: Force ACPI platform_profile via oneshot service (bare-metal, DYTC-capable hardware only)
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/stationctl-platform-profile.service
+      content: |
+        [Unit]
+        Description=Force {{ _stationctl_platform_profile }} ACPI platform profile (stationctl)
+        ConditionPathExists=/sys/firmware/acpi/platform_profile
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c 'echo {{ _stationctl_platform_profile }} > /sys/firmware/acpi/platform_profile 2>/dev/null || true'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+      owner: root
+      group: root
+      mode: "0644"
+    when: machine_role | default('vm') == 'bare-metal'
+    notify: Reload systemd and enable platform-profile service
+    tags: [kperf, cpu]
+
   - name: Install preload (only on hosts with an HDD)
     ansible.builtin.apt:
       name: preload
@@ -501,7 +563,8 @@
       msg:
       - "========================================================"
       - "Kernel/scheduler/network tuning applied on: {{ inventory_hostname }}"
-      - "  CPU governor: {{ _stationctl_cpu_governor }} (if cpufreq exposed by hypervisor)"
+      - "  CPU governor: {{ _stationctl_cpu_governor }} / EPP {{ _stationctl_cpu_epp }} (whichever the cpufreq driver actually exposes)"
+      - "  ACPI platform_profile: {{ _stationctl_platform_profile }} (bare-metal, DYTC-capable hardware only)"
       - "  GRUB cmdline: nowatchdog noirqdebug threadirqs preempt=full transparent_hugepage=madvise audit=0 loglevel=3{{ ' mitigations=off' if (workstation_kernel_mitigations_off | default(false) | bool) else '' }}"
       - "  >>> REBOOT REQUIRED for the GRUB cmdline change to take effect <<<"
       - "  THP: madvise (applied live)"
@@ -517,6 +580,13 @@
   - name: Reload systemd and enable cpu-performance service
     ansible.builtin.systemd:
       name: stationctl-cpu-performance.service
+      state: started
+      enabled: true
+      daemon_reload: true
+
+  - name: Reload systemd and enable platform-profile service
+    ansible.builtin.systemd:
+      name: stationctl-platform-profile.service
       state: started
       enabled: true
       daemon_reload: true

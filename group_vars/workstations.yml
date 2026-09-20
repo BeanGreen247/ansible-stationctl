@@ -161,6 +161,19 @@ workstation_power_packages:
   bare-metal:
     - mate-power-manager
     - upower
+    # thermald was tried here 2026-09-20 and REVERTED same day: live
+    # journalctl on local-workstation showed it refuses to run at all —
+    # "[.../thinkpad_acpi/dytc_lapmode] present: Thermald can't run on
+    # this platform... Unsupported cpu model or platform". This is
+    # deliberate upstream behavior, not a bug: this ThinkPad generation's
+    # firmware exposes Lenovo's own DYTC thermal control directly to the
+    # kernel via thinkpad_acpi's dytc_lapmode, surfaced at
+    # /sys/firmware/acpi/platform_profile — thermald's whole job is
+    # redundant wherever that exists, so it self-aborts instead of
+    # fighting it. See workstation_acpi_platform_profile below (setup-
+    # kernel-perf-tuning.yml) for the actual working equivalent on this
+    # hardware. Left as a comment (not silently dropped) so this isn't
+    # re-proposed the next time someone searches "thinkpad thermal perf".
 
 # WiFi/network management — bare-metal only. The wired interface
 # (enp4s0) stays on ifupdown/interfaces (untouched — see setup-base-
