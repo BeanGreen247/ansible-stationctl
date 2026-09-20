@@ -31,28 +31,22 @@ and the full non-bootstrap playbook set has now run against it end to end).
   than silently dropping an active session. Verified on local-workstation
   with no active session (silent no-op, as expected).
 
-## local-workstation — found, not yet fixed
+## local-workstation — fixed 2026-09-20
 
-- **`tigervncserver@:1.service` fails to start** (`exited with status=1`,
-  no `:1`-display log written) — confirmed via journal this predates
-  today's session (same failure recurring since at least 2026-09-17), so
-  it's **not** something today's playbook run caused. SSH and physical
-  console login are unaffected; only VNC remote desktop to this host is
-  down. Diagnosing further needs starting `tigervncserver :1` interactively
-  as `bean` (blocked from this session by a write-action permission rule)
-  — either allow that Bash pattern, or run `tigervncserver :1` manually
-  from the console/an SSH session and read the real stderr.
-  - **2026-09-19**: `scripts/run_playbook.py`'s idempotency postflight now
-    surfaces this concretely — `setup-remote-access.yml`'s "Enable and
-    start the packaged VNC server" task reports `changed=true` on every
-    single run, because the service genuinely never reaches a running
-    state (`systemctl status` shows `Active: inactive (dead)` seconds
-    after each start attempt, main process exits 0 but the wrapped
-    `tigervncsession` process itself exits status=1). This is the same
-    pre-existing bug above, not a new one — left the idempotency lock
-    ack'd rather than silenced (`changed_when: false` would hide a real
-    broken state), so it'll keep flagging on every playbook run through
-    the wrapper until the underlying VNC bug above is actually fixed.
+- **`tigervncserver@:1.service` fixed** — root cause: the packaged
+  `tigervncsession-start` (used by `tigervncserver@.service`) reads the VNC
+  password straight from `~/.config/tigervnc/passwd` (XDG) and never
+  migrates it from the legacy `~/.vnc/passwd` path itself — only the
+  legacy `vncserver` Perl wrapper does that migration. local-workstation's
+  password (set 2026-09-19) only ever existed at the legacy path, so
+  Xtigervnc found no password file, fell back to an interactive prompt on
+  the service's non-interactive TTY, and died
+  (`getpassword error: Inappropriate ioctl for device`, confirmed via
+  `~/.local/state/tigervnc/PeakPulse:1.log`). remote-workstation happened
+  to already have both copies (from an earlier manual `vncserver` run) so
+  it never hit this. `setup-remote-access.yml` now mirrors the password to
+  both paths unconditionally; service verified `active` and the playbook
+  re-runs clean (`changed=0`) on both hosts.
 
 - **`ayatana-indicator-application.service` (local-workstation) loses the
   StatusNotifierWatcher race to `mate-indicator-applet-complete` — found
