@@ -554,6 +554,58 @@ sysadmin_cli_packages:
   - libnotify-bin
 
 # ---------------------------------------------------------------------------
+# Build dependencies for compiling FOSS game engines/source ports from
+# source (World of Padman, Yamagi Quake II, and similar SDL2/OpenAL-based
+# projects) — requested 2026-09-21 to have these ready fleet-wide rather
+# than installing per-machine when a build is actually attempted.
+#
+# dialog, zlib1g-dev, xz-utils, and unzip are already covered by
+# armbian_build_framework_packages above — omitted here to avoid a
+# duplicate apt task; everything else from the requested list is included.
+game_engine_build_packages:
+  - build-essential
+  - cmake
+  - ninja-build
+  - nasm
+  - wget
+  - libsdl2-dev
+  - libsdl2-net-dev
+  - libsdl2-image-dev
+  - libsdl2-mixer-dev
+  - libopenal-dev
+  - libcurl4-openssl-dev
+  - libjpeg-dev
+  - libpng-dev
+  - libvorbis-dev
+  - libmad0-dev
+  - libmpg123-dev
+  - libbz2-dev
+  - libgmp-dev
+  - libspatialindex-dev
+  - libluajit-5.1-dev
+  - libsqlite3-dev
+  - libgtk2.0-dev
+  - libgtk-3-dev
+  - libfluidsynth-dev
+  - libportmidi-dev
+  - libsndfile1-dev
+  - libvpx-dev
+  - libvulkan-dev
+  - libvulkan1
+  - flac
+  - libflac-dev
+  - freepats
+  - openssl
+  - miniupnpc
+  - libao-dev
+  - vainfo
+  - vdpauinfo
+  - libzip-dev
+  - zipcmp
+  - zipmerge
+  - ziptool
+
+# ---------------------------------------------------------------------------
 # Python (pip) tooling used by the custom scripts that live in this
 # workstation's home dir (ansible-proxmox-ssh-gui-tool, OptiPing, the
 # starhaven node exporter, crafty tweaks). Debian 13 is PEP 668

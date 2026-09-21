@@ -1157,10 +1157,20 @@
   # lockdown, AIDE/file-integrity tooling, or an external syslog host —
   # see the round 1 note above for why those stay manual/deferred.
 
-  - name: "[CIS 7.2] Install apt-listbugs (Debian-only — not packaged for Ubuntu) [DEB-0810]"
+  # Reverted 2026-09-21 (same day as install): apt-listbugs fails closed on
+  # any non-interactive apt-get transaction that touches a package with an
+  # open RC-severity bug report, even one with zero real-world bearing (hit
+  # live installing game_engine_build_packages — a "serious" bug against
+  # autoconf about an unrelated package failing to build under GCC-16
+  # blocked the whole transaction). That makes every future unattended
+  # Ansible apt run a coin flip against Debian's open-bug list — too much
+  # security for a workstation fleet the user actively wants to keep
+  # installing things on. Purged fleet-wide rather than just neutered via
+  # config, per explicit user request.
+  - name: "[CIS 7.2] Remove apt-listbugs (too disruptive to unattended apt installs) [DEB-0810]"
     ansible.builtin.apt:
       name: apt-listbugs
-      state: present
+      state: absent
     failed_when: false # a handful of hosts in this fleet run Ubuntu apt sources under a Debian-labelled hostname/template — no apt-listbugs there
     tags: [ cis7 ]
 
@@ -1230,7 +1240,7 @@
       - "  fail2ban:   sshd jail enabled"
       - "  rkhunter installed (on-demand — run 'sudo rkhunter --check' manually)"
       - "  acct/sysstat: process + activity accounting enabled"
-      - "  apt-listbugs: installed (warns on critical bugs before apt install)"
+      - "  apt-listbugs: removed (blocked unattended apt installs on unrelated RC bugs)"
       - "========================================================"
     tags: [ always ]
 

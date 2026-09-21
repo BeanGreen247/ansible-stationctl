@@ -365,6 +365,13 @@
     when: sysadmin_cli_packages | default([]) | length > 0
     tags: [dev, packages, cli-tools]
 
+  - name: Install game engine build dependencies (World of Padman, Yamagi Quake II, etc.)
+    ansible.builtin.apt:
+      name: "{{ game_engine_build_packages }}"
+      state: present
+    when: game_engine_build_packages | default([]) | length > 0
+    tags: [dev, packages, game-engines]
+
   # python3-argcomplete (a real dependency of ansible-core/yq/pipx, not
   # something to remove) ships a global bash-completion hook at
   # /etc/bash_completion.d/global-python-argcomplete that registers itself
