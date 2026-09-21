@@ -53,6 +53,11 @@ workstation_swapfile_gb: 8
 cis_ufw_extra_ports:
 - { port: "5901", proto: "tcp", comment: "TigerVNC remote desktop" }
 
+# This host only — restart-only VNC launcher (setup-remote-access.yml).
+# VNC is always-on here (vnc_service_enabled defaults true), so a simple
+# "Restart VNC" action is what's wanted, not a start/stop toggle.
+deploy_vnc_restart_launcher: true
+
 # Used by set-proxmox-notes.yml to credit both repos in the VM's Proxmox
 # notes field. VMID from ansible-proxmox/group_vars/all/vms.yml.
 proxmox_vmid: 115

@@ -47,3 +47,23 @@ workstation_swapfile_gb: 16
 # or remote desktop access breaks on first run.
 cis_ufw_extra_ports:
 - { port: "5901", proto: "tcp", comment: "TigerVNC remote desktop" }
+
+# VNC off by default on this host (2026-09-21) — an always-on standing
+# TigerVNC/MATE session was found racing the physical seat0 session for
+# every udisks2 mount request, breaking USB drive mounting entirely.
+# Toggle manually as needed: the "Remote Desktop (VNC)" desktop launcher
+# (setup-remote-access.yml, deploy_vnc_toggle_launcher below) runs
+# /usr/local/bin/vnc-toggle.sh via pkexec, or just
+# `sudo systemctl start/stop tigervncserver@:1.service` directly.
+vnc_service_enabled: false
+
+# This host only — see setup-remote-access.yml's toggle-launcher tasks.
+deploy_vnc_toggle_launcher: true
+
+# Skip the "ask before restarting VNC" GUI safety-gate dialog on this host
+# — it exists to protect an active VNC session on a VM you primarily
+# access remotely (e.g. remote-workstation via Guacamole), which doesn't
+# apply here: VNC is off by default on this bare-metal laptop and only
+# ever toggled manually via pkexec (vnc-toggle.sh), never through this
+# playbook's restart handler.
+vnc_restart_safety_gate_enabled: false

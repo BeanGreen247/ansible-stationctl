@@ -36,12 +36,19 @@
   # real session on 2026-09-21. Check for an actual MATE session process
   # instead — true for both "actively watching" and "idle but logged in",
   # and for a physical seat0 login on local-workstation too.
+  # vnc_restart_safety_gate_enabled defaults to true (protects VNC/Guacamole
+  # hosts like remote-workstation, where the VNC session IS the primary way
+  # someone is using the machine). Set to false in a host's host_vars to
+  # skip this whole dialog on hosts where it doesn't apply — e.g.
+  # local-workstation, where VNC is off by default (vnc_service_enabled:
+  # false) and toggled manually via pkexec (see the vnc-toggle.sh launcher
+  # below), never through this playbook's restart handler at all.
   - name: Check whether a MATE session is running for the end-user
     ansible.builtin.command: "pgrep -u {{ vm_enduser_name }} -x mate-session"
     register: vnc_active_check
     changed_when: false
     failed_when: false
-    when: vm_enduser_name | default('') | length > 0
+    when: (vm_enduser_name | default('') | length > 0) and (vnc_restart_safety_gate_enabled | default(true) | bool)
     tags: [remote-access, vnc, safety]
 
   - name: Set fact for active session
@@ -304,13 +311,120 @@
     notify: Restart VNC server
     tags: [remote-access, vnc, systemd]
 
+  # vnc_service_enabled defaults to true (existing always-on behavior,
+  # e.g. remote-workstation) — override to false in a host's host_vars to
+  # leave VNC off by default there (see local-workstation/main.yml: an
+  # always-on standing VNC/MATE session was found racing the physical
+  # seat0 session for udisks2 mount requests, breaking USB mounting).
   - name: Enable and start the packaged VNC server on configured display
     ansible.builtin.systemd:
       name: "tigervncserver@:{{ vnc_display }}.service"
       state: started
       enabled: true
       daemon_reload: true
+    when: vnc_service_enabled | default(true) | bool
     tags: [remote-access, vnc, systemd]
+
+  - name: "Ensure the packaged VNC server is stopped and disabled (vnc_service_enabled: false)"
+    ansible.builtin.systemd:
+      name: "tigervncserver@:{{ vnc_display }}.service"
+      state: stopped
+      enabled: false
+      daemon_reload: true
+    when: not (vnc_service_enabled | default(true) | bool)
+    tags: [remote-access, vnc, systemd]
+
+  # ── Manual VNC on/off desktop launcher (this host only) ──────────────
+  # Host opts in via deploy_vnc_toggle_launcher: true in its host_vars.
+  # Uses pkexec (not a NOPASSWD sudoers entry) so it stays gated behind
+  # the normal polkit admin-auth prompt on every use, not a standing
+  # passwordless privilege — matches how manual/occasional this action is.
+  - name: "[VNC toggle] Deploy the toggle script"
+    ansible.builtin.copy:
+      dest: /usr/local/bin/vnc-toggle.sh
+      owner: root
+      group: root
+      mode: "0755"
+      content: |
+        #!/bin/sh
+        # vnc-toggle.sh — start/stop this workstation's TigerVNC remote-desktop
+        # service. Deployed by setup-remote-access.yml (deploy_vnc_toggle_launcher).
+        set -eu
+
+        SERVICE="tigervncserver@:{{ vnc_display }}.service"
+
+        if systemctl is-active --quiet "$SERVICE"; then
+          pkexec systemctl stop "$SERVICE"
+          notify-send -i network-vpn "Remote Desktop (VNC)" "VNC service stopped."
+        else
+          pkexec systemctl start "$SERVICE"
+          notify-send -i network-vpn "Remote Desktop (VNC)" "VNC service started."
+        fi
+    when: deploy_vnc_toggle_launcher | default(false) | bool
+    tags: [remote-access, vnc, toggle-launcher]
+
+  - name: "[VNC toggle] Deploy the desktop launcher"
+    ansible.builtin.copy:
+      dest: /usr/share/applications/vnc-toggle.desktop
+      owner: root
+      group: root
+      mode: "0644"
+      content: |
+        [Desktop Entry]
+        Type=Application
+        Name=Toggle Remote Desktop (VNC)
+        Comment=Start or stop this workstation's TigerVNC remote desktop service
+        Exec=/usr/local/bin/vnc-toggle.sh
+        Icon=network-vpn
+        Terminal=false
+        Categories=System;Utility;
+        NoDisplay=false
+    when: deploy_vnc_toggle_launcher | default(false) | bool
+    tags: [remote-access, vnc, toggle-launcher]
+
+  # ── Manual VNC restart launcher (this host only) ──────────────────────
+  # For VNC-primary hosts (e.g. remote-workstation) — VNC is always on
+  # here, so there's no "off" state worth toggling; this just gives the
+  # user a one-click way to kick a stuck/frozen VNC session without
+  # waiting on anything automatic. Same pkexec pattern as the toggle
+  # launcher above (no standing NOPASSWD privilege).
+  - name: "[VNC restart] Deploy the restart script"
+    ansible.builtin.copy:
+      dest: /usr/local/bin/vnc-restart.sh
+      owner: root
+      group: root
+      mode: "0755"
+      content: |
+        #!/bin/sh
+        # vnc-restart.sh — restart this workstation's TigerVNC remote-desktop
+        # service. Deployed by setup-remote-access.yml (deploy_vnc_restart_launcher).
+        set -eu
+
+        SERVICE="tigervncserver@:{{ vnc_display }}.service"
+
+        pkexec systemctl restart "$SERVICE"
+        notify-send -i network-vpn "Remote Desktop (VNC)" "VNC service restarted."
+    when: deploy_vnc_restart_launcher | default(false) | bool
+    tags: [remote-access, vnc, restart-launcher]
+
+  - name: "[VNC restart] Deploy the desktop launcher"
+    ansible.builtin.copy:
+      dest: /usr/share/applications/vnc-restart.desktop
+      owner: root
+      group: root
+      mode: "0644"
+      content: |
+        [Desktop Entry]
+        Type=Application
+        Name=Restart Remote Desktop (VNC)
+        Comment=Restart this workstation's TigerVNC remote desktop service
+        Exec=/usr/local/bin/vnc-restart.sh
+        Icon=network-vpn
+        Terminal=false
+        Categories=System;Utility;
+        NoDisplay=false
+    when: deploy_vnc_restart_launcher | default(false) | bool
+    tags: [remote-access, vnc, restart-launcher]
 
   - name: Download Tailscale install script
     ansible.builtin.get_url:
@@ -370,5 +484,10 @@
     ansible.builtin.systemd:
       name: "tigervncserver@:{{ vnc_display }}.service"
       state: restarted
-    when: vnc_restart_ok | default(true) | bool
+    # Never let a config-change notification turn VNC back on for a host
+    # that has it deliberately off (vnc_service_enabled: false) — found
+    # 2026-09-21: this handler fired on local-workstation from an
+    # unrelated config task and restarted (started) the service seconds
+    # after the "stopped and disabled" task above had just turned it off.
+    when: (vnc_restart_ok | default(true) | bool) and (vnc_service_enabled | default(true) | bool)
     failed_when: false
