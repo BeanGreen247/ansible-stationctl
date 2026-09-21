@@ -550,6 +550,26 @@
     notify: Update dconf databases
     tags: [mate, bluetooth, dconf]
 
+  # Enables marco's screen-flash accessibility feature system-wide (also
+  # useful on its own merits — hard-of-hearing/noisy-environment friendly).
+  # setup-remote-access.yml's VNC-restart confirmation dialog relies on
+  # this being on: it rings the X bell (xkbbell) to grab an idle/AFK user's
+  # attention, which only produces a visible flash when visual-bell is
+  # enabled here — otherwise xkbbell is a silent no-op with compositing off.
+  - name: Enable marco's visual bell (fullscreen flash on X bell)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/07-visual-bell
+      content: |
+        [org/mate/marco/general]
+        visual-bell=true
+        visual-bell-type='fullscreen'
+        audible-bell=true
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, dconf, accessibility]
+
   - name: Ensure dconf locks directory exists
     ansible.builtin.file:
       path: /etc/dconf/db/local.d/locks

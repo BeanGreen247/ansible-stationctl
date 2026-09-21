@@ -596,6 +596,25 @@ vnc_display: "1"
 vnc_geometry: "1920x1080"
 vnc_depth: 16
 
+# VNC-restart confirmation dialog (setup-remote-access.yml's safety gate) —
+# only installed/used when a MATE session is actually found running for
+# vm_enduser_name at play time. See the "Ask the logged-in user before
+# restarting VNC" task for why this replaced a plain CLI `pause`: a pause
+# prompt only works when the playbook is run from an attached terminal, and
+# silently can't block anything when driven non-interactively (found
+# 2026-09-21 — a non-interactive run restarted VNC and dropped a live
+# session because the old TCP-ESTABLISHED check missed it).
+vnc_restart_prompt_packages:
+  - zenity           # general-purpose GUI dialog tool for future ad-hoc scripts (not used by
+                      # the restart prompt itself — that uses yad below, which supports the
+                      # gradient theming/timeout this dialog needed and zenity's build doesn't)
+  - libnotify-bin    # notify-send — the heads-up toast fired just before the dialog maps
+  - yad               # the actual confirmation dialog — richer theming/timeout support than zenity
+  - wmctrl            # sets _NET_WM_STATE_DEMANDS_ATTENTION so the taskbar entry flags the dialog
+  - xdotool            # locates/centers/raises the dialog window on the user's real screen
+  - x11-xkb-utils        # xkbbell — rings the X bell, which marco's visual-bell turns into a screen flash
+vnc_restart_prompt_timeout: 45
+
 # ---------------------------------------------------------------------------
 # Dev applets (setup-dev-applets.yml) — ported from the user's kubuntu-setup
 # reference project (github.com/BeanGreen247/kubuntu-setup): apt-key-refresh,

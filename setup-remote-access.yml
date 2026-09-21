@@ -29,43 +29,96 @@
 
   # Safety gate: restarting the VNC server (handler below) kills the Xvnc
   # process outright — anyone connected right now gets dropped mid-session,
-  # no warning. Detect an established client connection on the VNC port
-  # BEFORE any task that can notify that handler, so the handler can check
-  # the result and refuse to fire without explicit confirmation instead of
-  # silently kicking whoever's on it.
-  - name: Check for an active VNC client connection
-    ansible.builtin.shell: |
-      set -o pipefail
-      ss -tn state established "( sport = :{{ 5900 + (vnc_display | int) }} )" | grep -c ESTAB || true
-    args:
-      executable: /bin/bash
+  # no warning. A plain TCP-ESTABLISHED check on the VNC port only catches
+  # someone actively streaming frames at that exact instant — it silently
+  # misses "logged in but idle" (client connected, nothing moving on
+  # screen right now) and can race a client reconnect. Confirmed missed a
+  # real session on 2026-09-21. Check for an actual MATE session process
+  # instead — true for both "actively watching" and "idle but logged in",
+  # and for a physical seat0 login on local-workstation too.
+  - name: Check whether a MATE session is running for the end-user
+    ansible.builtin.command: "pgrep -u {{ vm_enduser_name }} -x mate-session"
     register: vnc_active_check
     changed_when: false
+    failed_when: false
+    when: vm_enduser_name | default('') | length > 0
     tags: [remote-access, vnc, safety]
 
-  - name: Set fact for active VNC session
+  - name: Set fact for active session
     ansible.builtin.set_fact:
-      vnc_has_active_session: "{{ (vnc_active_check.stdout | trim | int(default=0)) > 0 }}"
+      vnc_has_active_session: "{{ (vnc_active_check.rc | default(1)) == 0 }}"
     tags: [remote-access, vnc, safety]
 
-  # Only prompts when a client is actually connected — silent/no-op the rest
-  # of the time. Typing anything other than exactly "yes" (including just
-  # hitting Enter) leaves vnc_restart_ok false, so the handler below skips
-  # the restart and the play continues (config still gets written, it just
-  # won't take effect until the next natural restart/logout).
-  - name: Ask before restarting VNC while a client is connected
-    ansible.builtin.pause:
-      prompt: |
-        An active VNC client is connected to {{ inventory_hostname }} display :{{ vnc_display }}.
-        Restarting the VNC server now will disconnect that session immediately.
-        Type 'yes' to restart anyway, or press Enter to skip the restart this run.
+  # A CLI `pause` prompt only works when this playbook is run from an
+  # attached terminal — it's silently useless (proceeds without ever
+  # really asking) when driven non-interactively, which is exactly how a
+  # 2026-09-21 run restarted VNC and dropped a live session with no
+  # warning. Pop a real dialog into the user's own X session instead, so
+  # the confirmation reaches them wherever they actually are. Only
+  # installed/run when a session was actually found above.
+  - name: Install VNC-restart confirmation dialog dependencies
+    ansible.builtin.apt:
+      name: "{{ vnc_restart_prompt_packages }}"
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    when: vnc_has_active_session
+    tags: [remote-access, vnc, safety]
+
+  - name: Ensure the restart-prompt dialog theme directory exists
+    ansible.builtin.file:
+      path: /etc/stationctl/vnc-restart-prompt-theme/gtk-3.0
+      state: directory
+      owner: root
+      group: root
+      mode: "0755"
+    when: vnc_has_active_session
+    tags: [remote-access, vnc, safety]
+
+  # yad in trixie has no --css flag — GTK3's own per-process config-dir CSS
+  # autoload (XDG_CONFIG_HOME/gtk-3.0/gtk.css) is what actually renders
+  # this, scoped to just the one dialog invocation via an env var, not the
+  # user's real session config.
+  - name: Deploy the restart-prompt dialog's gradient theme (GTK3 CSS)
+    ansible.builtin.copy:
+      dest: /etc/stationctl/vnc-restart-prompt-theme/gtk-3.0/gtk.css
+      content: |
+        window, .background {
+          background-image: linear-gradient(135deg, #b30000, #ff8c00);
+        }
+        label { color: #ffffff; font-weight: bold; }
+      owner: root
+      group: root
+      mode: "0644"
+    when: vnc_has_active_session
+    tags: [remote-access, vnc, safety]
+
+  - name: Deploy the VNC-restart confirmation dialog script
+    ansible.builtin.copy:
+      src: files/remote-access/stationctl-vnc-restart-prompt.sh
+      dest: /usr/local/bin/stationctl-vnc-restart-prompt.sh
+      owner: root
+      group: root
+      mode: "0755"
+    when: vnc_has_active_session
+    tags: [remote-access, vnc, safety]
+
+  # Fails safe: no session found (script never got this far), dialog
+  # closed/declined, or the timeout elapses unanswered all leave rc != 0,
+  # so vnc_restart_ok below stays false and the handler skips the restart.
+  - name: Ask the logged-in user before restarting VNC (GUI dialog, fails safe)
+    ansible.builtin.command: >-
+      /usr/local/bin/stationctl-vnc-restart-prompt.sh
+      {{ vm_enduser_name }} {{ inventory_hostname }} :{{ vnc_display }} {{ vnc_restart_prompt_timeout }}
     register: vnc_restart_confirm
+    changed_when: false
+    failed_when: false
     when: vnc_has_active_session
     tags: [remote-access, vnc, safety]
 
   - name: Record whether the VNC restart may proceed
     ansible.builtin.set_fact:
-      vnc_restart_ok: "{{ (not vnc_has_active_session) or (vnc_restart_confirm.user_input | default('') | lower == 'yes') }}"
+      vnc_restart_ok: "{{ (not vnc_has_active_session) or ((vnc_restart_confirm.rc | default(1)) == 0) }}"
     tags: [remote-access, vnc, safety]
 
   - name: Install TigerVNC packages
@@ -303,8 +356,8 @@
     ansible.builtin.debug:
       msg: >-
         VNC config/password changed on {{ inventory_hostname }} but the restart was
-        skipped because a client was connected and restart wasn't confirmed — the
-        new config takes effect on the next natural restart or client disconnect/logout.
+        skipped because a session was active and the restart wasn't confirmed via the
+        on-screen dialog — the new config takes effect on the next natural restart or logout.
     when: vnc_has_active_session and not (vnc_restart_ok | default(true) | bool)
     tags: [remote-access, vnc, summary]
 
