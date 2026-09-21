@@ -39,3 +39,11 @@ workstation_min_free_kbytes: 307200
 
 # Disk-swap overflow tier on the laptop's real SSD, below zram in priority.
 workstation_swapfile_gb: 16
+
+# security-harden.yml (CIS 4 / UFW) enables a default-deny-incoming
+# firewall — this host was never firewalled before that playbook was
+# unified with ansible-proxmox's, so TigerVNC (vnc_display: "1" ->
+# port 5901, see group_vars/workstations.yml) must be explicitly allowed
+# or remote desktop access breaks on first run.
+cis_ufw_extra_ports:
+- { port: "5901", proto: "tcp", comment: "TigerVNC remote desktop" }

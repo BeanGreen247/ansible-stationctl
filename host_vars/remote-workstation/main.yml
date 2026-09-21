@@ -45,6 +45,14 @@ workstation_vfs_cache_pressure: 500
 # Sits below zram in priority; zram absorbs everything until it's full.
 workstation_swapfile_gb: 8
 
+# security-harden.yml (CIS 4 / UFW) enables a default-deny-incoming
+# firewall — this host was never firewalled before that playbook was
+# unified with ansible-proxmox's, so TigerVNC (vnc_display: "1" ->
+# port 5901, see group_vars/workstations.yml) must be explicitly allowed
+# or remote desktop access breaks on first run.
+cis_ufw_extra_ports:
+- { port: "5901", proto: "tcp", comment: "TigerVNC remote desktop" }
+
 # Used by set-proxmox-notes.yml to credit both repos in the VM's Proxmox
 # notes field. VMID from ansible-proxmox/group_vars/all/vms.yml.
 proxmox_vmid: 115

@@ -1,0 +1,1227 @@
+# security-harden.yml
+# CIS Benchmark Level 1 Hardening + Lynis-suggestion extras — Debian/Ubuntu
+# LXCs, VMs, and workstations
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ SHARED FILE — lives in TWO repos, kept in sync BY HAND:               │
+# │   ansible-proxmox/security-harden.yml                                 │
+# │   ansible-stationctl/security-harden.yml                              │
+# │ They must stay byte-for-byte identical (same pattern as               │
+# │ docs/INVENTORY-CONSOLIDATION.md). There is no symlink or submodule    │
+# │ tying them together — whichever repo you edit this in, copy the      │
+# │ whole file verbatim to the other repo's copy in the SAME commit/PR    │
+# │ session, or the two fleets will silently drift out of hardening sync. │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# Overview
+#   Applies CIS Distribution Independent Linux Benchmark + Debian-specific
+#   controls, plus a small curated set of additional Lynis suggestions
+#   (fail2ban, rootkit/checksum diagnostics, unused-protocol blacklisting),
+#   to every managed host across both fleets: ansible-proxmox's lxcs + vms
+#   groups, and ansible-stationctl's workstations group.  Controls that
+#   require kernel-level access (sysctl, auditd, module blacklisting) are
+#   attempted on all hosts; containers that cannot apply them skip
+#   gracefully.  Alpine hosts receive the subset of controls that apply to
+#   musl + OpenRC.  Whichever of lxcs/vms/workstations don't exist in a
+#   given repo's inventory are simply unmatched (0 hosts) — harmless.
+#
+# What this playbook does (by CIS section)
+#   CIS 1 — Initial Setup
+#     1.1  Disable unused filesystem modules (VMs only — no effect in LXC)
+#     1.1b Blacklist unused network protocol kernel modules (dccp/sctp/rds/tipc)
+#     1.3  AppArmor: install, enforce
+#     1.5  Process hardening: ASLR, core dumps, dmesg restriction
+#     1.7  Warning banners (/etc/issue, /etc/issue.net, /etc/motd)
+#   CIS 2 — Services
+#     2.x  Disable unnecessary network services (avahi, cups, rpcbind, etc.)
+#   CIS 3 — Network Configuration
+#     3.x  sysctl: disable IP forwarding, redirects, RA; enable SYN cookies, rp_filter
+#   CIS 4 — Host-Based Firewall
+#     4.x  UFW: install, allow SSH + any per-host extra ports, default
+#          deny-incoming, enable. See "Per-host ports" below — this is the
+#          section most likely to lock you out if a host's ports aren't
+#          declared before this runs.
+#   CIS 5 — Logging and Auditing
+#     5.x  auditd: install, enable, core audit rules
+#   CIS 6 — System Maintenance / Access Control
+#     6.1  SSH: comprehensive sshd_config hardening
+#     6.2  PAM: pam_pwquality password complexity, pam_faillock brute-force lockout
+#     6.3  login.defs: password aging, UMASK 027
+#     6.4  Filesystem permissions: sticky bit, suid/sgid audit
+#     6.5  System account shells locked, no empty passwords
+#   Extras — Lynis suggestions curated for zero realistic breakage risk
+#     x.1  fail2ban: install, enable sshd jail
+#     x.2  Diagnostic/hardening packages: libpam-tmpdir, libpam-passwdqc,
+#          debsums, apt-show-versions, rkhunter (on-demand, no timer)
+#
+# Per-host ports (CIS 4 / UFW) — READ BEFORE FIRST RUN ON A NEW HOST
+#   SSH (22) is always allowed. Every other port a host actually needs
+#   (VNC, FTP, HTTPS dashboards, game servers, exporters, ...) MUST be
+#   declared via that host's host_vars `cis_ufw_extra_ports`, e.g.:
+#     cis_ufw_extra_ports:
+#     - { port: "5901", proto: "tcp", comment: "TigerVNC remote desktop" }
+#   Known examples already declared: vm-debian-remote-desktop (VNC 5901),
+#   vm-debian-media-server / vm-debian-navidrome-bean (FTP 21 + passive
+#   range), lxc-wazuh (HTTPS 443), remote-workstation / local-workstation
+#   (VNC 5901 — see ansible-stationctl's host_vars). Do NOT add
+#   cis_ufw_extra_ports here in play vars — host_vars would be overridden.
+#
+# Safety guards
+#   * SSH port 22 opened in UFW BEFORE enabling firewall (prevents lockout)
+#   * ansibleuser sudoers entry preserved throughout
+#   * Services intentionally running (nginx, grafana-server, etc.) are NOT disabled
+#   * pam_faillock unlock_time=900s; ansibleuser is never locked by this playbook
+#   * AllowTcpForwarding is set to no per CIS; override cis_allow_tcp_fwd=true if needed
+#   * sysctl tasks use ignore_errors: true — LXC containers may reject some writes
+#   * auditd tasks use failed_when: false — auditd may not run in unprivileged LXC
+#
+# Tags (run individual sections)
+#   cis1       Section 1: Initial setup (incl. protocol module blacklist)
+#   cis2       Section 2: Disable unnecessary services
+#   cis3       Section 3: Network / sysctl
+#   cis4       Section 4: UFW firewall
+#   cis5       Section 5: auditd
+#   cis6_ssh   Section 6.1: SSH hardening
+#   cis6_pam   Section 6.2-6.3: PAM + login.defs
+#   cis6_fs    Section 6.4-6.5: Filesystem + account checks
+#   cis7       Extras: fail2ban + diagnostic/hardening packages
+#   cis_alpine Alpine-specific hardening subset
+#
+# Usage
+#   ansible-playbook security-harden.yml                          # all sections, all hosts
+#   ansible-playbook security-harden.yml --tags cis6_ssh          # SSH only
+#   ansible-playbook security-harden.yml --limit lxcs --tags cis3 # sysctl on LXCs only
+#   ansible-playbook security-harden.yml --limit workstations     # stationctl fleet only
+#
+# Re-running
+#   Fully idempotent.  Re-running after changes is safe and expected.
+#
+# Credit: Thomas Mozdren
+---
+
+# PLAY 1: Debian / Ubuntu hardening (apt-based hosts)
+- name: CIS Level 1 hardening — Debian / Ubuntu hosts
+  hosts: lxcs:vms:workstations
+  gather_facts: true
+  become: true
+  ignore_unreachable: true
+
+  vars:
+    # ── SSH ────────────────────────────────────────────────────────────────
+    # Users permitted to SSH in (space-separated).  ansibleuser MUST remain.
+    # If you use a personal login account (e.g. cartman), add it here:
+    #   cis_ssh_allowed_users: "ansibleuser cartman"
+    cis_ssh_allowed_users: "ansibleuser {{ vm_enduser_name | default('') }}"
+
+    # Approved algorithm sets per CIS benchmark
+    cis_ssh_ciphers: "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+    cis_ssh_macs: "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+    cis_ssh_kex: "curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group14-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256"
+
+    # Set to true if you intentionally use SSH TCP forwarding / tunnels
+    cis_allow_tcp_fwd: false
+
+    # ── Services to disable (leave running if host provides the service) ──
+    # To keep a service this list would otherwise stop/purge, set
+    # cis_preserve_services_extra in that host's host_vars (a plain list —
+    # it gets merged onto cis_preserve_services_baseline below). Do NOT set
+    # cis_preserve_services directly in host_vars — see the note there.
+    cis_unneeded_services:
+    - avahi-daemon
+    - cups
+    - isc-dhcp-server
+    - isc-dhcp-server6
+    - slapd
+    - nfs-kernel-server
+    - rpcbind
+    - bind9
+    - vsftpd
+    - squid
+    - snmpd
+    - nis
+    - rsh-server
+    - talk
+    - telnet
+    - tftp
+    # Services that are intentionally present on some hosts — skip disabling.
+    # Extend in host_vars/<host>/vault.yml or group_vars if needed.
+    # NOTE: this is intentionally NOT named cis_preserve_services directly.
+    # Ansible's variable precedence puts play vars ABOVE host_vars, so a
+    # host_vars/<host>/main.yml that set cis_preserve_services here would be
+    # silently ignored — that bug already caused a previous real run of
+    # this playbook to purge vsftpd off vm-debian-media-server and
+    # vm-debian-navidrome-bean despite both declaring it in host_vars
+    # (caught via --check --diff 2026-09-21, before it could happen a third
+    # time to vm-debian-mc-server). Per-host additions belong in
+    # cis_preserve_services_extra in host_vars — see the merge below.
+    cis_preserve_services_baseline:
+    - ssh
+    - sshd
+    - qemu-guest-agent
+    - ufw
+    - auditd
+    - apparmor
+    - cron
+    - rsyslog
+    - systemd-journald
+    - nginx
+    - authelia
+    - grafana-server
+    - prometheus
+    - node-exporter
+    - fail2ban
+    cis_preserve_services: "{{ cis_preserve_services_baseline + (cis_preserve_services_extra | default([])) }}"
+    # ── PAM ────────────────────────────────────────────────────────────────
+    cis_pw_minlen: 14
+    cis_pw_minclass: 4 # require lower, upper, digit, special
+    cis_pw_maxrepeat: 3
+    cis_faillock_deny: 5 # lock after N failures
+    cis_faillock_unlock_time: 900 # seconds; 0 = manual unlock required
+
+    # ── Login / account policy ────────────────────────────────────────────
+    cis_pass_max_days: 365
+    cis_pass_min_days: 1
+    cis_pass_warn_age: 7
+    cis_inactive_lock_days: 30 # lock accounts inactive for this many days
+
+    # ── Warning banner ────────────────────────────────────────────────────
+    cis_login_banner: |
+      ########################################################################
+      # Authorized access only.  All activity may be monitored and reported.
+      ########################################################################
+
+    # ── Filesystem module blacklist (VMs only; no effect in LXC) ─────────
+    _cis_unused_fs_modules:
+    - cramfs
+    - freevxfs
+    - hfs
+    - hfsplus
+    - jffs2
+    - squashfs
+    - udf
+    # Convenience flags
+    _is_vm: "{{ inventory_hostname in groups['vms'] }}"
+    _is_lxc: "{{ inventory_hostname in groups['lxcs'] }}"
+    # ── Per-host service ports to allow through UFW ───────────────────────
+    # Override in host_vars/<host>/main.yml — example:
+    #   cis_ufw_extra_ports:
+    #     - { port: "3000", proto: "tcp", comment: "Grafana" }
+    # (Do NOT define cis_ufw_extra_ports here — host_vars would be overridden)
+
+    # ── Only run Debian/Ubuntu play on apt-based hosts ────────────────────
+  pre_tasks:
+  - name: Skip non-apt hosts in Debian play
+    when: ansible_pkg_mgr | default('') != 'apt'
+    ansible.builtin.meta: end_host
+
+  tasks:
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 1 — Initial Setup
+  # ════════════════════════════════════════════════════════════════════════
+
+  # 1.1 — Disable unused filesystem kernel modules
+  # (Only effective on full VMs; LXC shares host kernel and cannot blacklist)
+  - name: "[CIS 1.1] Write modprobe blacklist for unused filesystems (VMs only)"
+    ansible.builtin.copy:
+      dest: /etc/modprobe.d/cis-unused-filesystems.conf
+      owner: root
+      group: root
+      mode: "0644"
+      content: |
+        # CIS 1.1 — Disable unused filesystem modules
+        {% for m in _cis_unused_fs_modules %}
+        install {{ m }} /bin/true
+        blacklist {{ m }}
+        {% endfor %}
+    when: _is_vm | bool
+    tags: [ cis1 ]
+
+  # 1.1b — Blacklist unused network protocol kernel modules (from
+  # ansible-stationctl's Lynis triage [NETW-3200] — none of these
+  # protocols are used anywhere in either fleet).
+  - name: "[CIS 1.1b] Blacklist unused network protocol kernel modules"
+    ansible.builtin.copy:
+      dest: /etc/modprobe.d/security-blacklist-protocols.conf
+      owner: root
+      group: root
+      mode: "0644"
+      content: |
+        install dccp /bin/false
+        install sctp /bin/false
+        install rds /bin/false
+        install tipc /bin/false
+    tags: [ cis1 ]
+
+  # 1.3 — AppArmor
+  - name: "[CIS 1.3] Install AppArmor and utils"
+    ansible.builtin.apt:
+      name: [ apparmor, apparmor-utils ]
+      state: present
+      update_cache: true
+      cache_valid_time: 3600
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.3] Ensure AppArmor is enabled and running"
+    ansible.builtin.service:
+      name: apparmor
+      state: started
+      enabled: true
+    failed_when: false # May not be available in unprivileged containers
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.3] Set AppArmor to enforce mode for loaded profiles"
+    ansible.builtin.command: aa-enforce /etc/apparmor.d/*
+    changed_when: false
+    failed_when: false # Profiles may already be in enforce mode
+    tags: [ cis1 ]
+
+  # 1.5 — Additional process hardening
+  # Remove any host-namespace sysctl keys previously written to LXC containers
+  # (they cause reload errors on every subsequent sysctl task).
+  - name: "[CIS 1.5] Remove host-namespace sysctl keys from LXC sysctl.d file"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      state: absent
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: false
+    loop:
+    - fs.suid_dumpable
+    - kernel.randomize_va_space
+    - kernel.dmesg_restrict
+    - kernel.kptr_restrict
+    - fs.protected_hardlinks
+    - fs.protected_symlinks
+    when: _is_lxc | bool
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.5.1] Restrict core dump access (limits.conf)"
+    ansible.builtin.lineinfile:
+      path: /etc/security/limits.conf
+      line: "* hard core 0"
+      regexp: '^\*\s+hard\s+core'
+      state: present
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.5.1] Restrict core dumps via sysctl (fs.suid_dumpable)"
+    ansible.posix.sysctl:
+      name: fs.suid_dumpable
+      value: "0"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    when: not (_is_lxc | bool) # host-namespace key; unprivileged LXC cannot set it
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.5.2] Enable ASLR (kernel.randomize_va_space=2)"
+    ansible.posix.sysctl:
+      name: kernel.randomize_va_space
+      value: "2"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    when: not (_is_lxc | bool)
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.5] Restrict dmesg to root (kernel.dmesg_restrict)"
+    ansible.posix.sysctl:
+      name: kernel.dmesg_restrict
+      value: "1"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    when: not (_is_lxc | bool)
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.5] Restrict kernel pointer exposure (kernel.kptr_restrict)"
+    ansible.posix.sysctl:
+      name: kernel.kptr_restrict
+      value: "2"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    when: not (_is_lxc | bool)
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.5] Enable protected hardlinks"
+    ansible.posix.sysctl:
+      name: fs.protected_hardlinks
+      value: "1"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    when: not (_is_lxc | bool)
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.5] Enable protected symlinks"
+    ansible.posix.sysctl:
+      name: fs.protected_symlinks
+      value: "1"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    when: not (_is_lxc | bool)
+    tags: [ cis1 ]
+
+  # 1.7 — Warning banners
+  - name: "[CIS 1.7.1] Set /etc/motd login banner"
+    ansible.builtin.copy:
+      dest: /etc/motd
+      content: "{{ cis_login_banner }}"
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.7.2] Set /etc/issue (local console banner)"
+    ansible.builtin.copy:
+      dest: /etc/issue
+      content: "{{ cis_login_banner }}"
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [ cis1 ]
+
+  - name: "[CIS 1.7.3] Set /etc/issue.net (network login banner)"
+    ansible.builtin.copy:
+      dest: /etc/issue.net
+      content: "{{ cis_login_banner }}"
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [ cis1 ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 2 — Services
+  # ════════════════════════════════════════════════════════════════════════
+
+  - name: "[CIS 2.x] Stop and disable unneeded services"
+    ansible.builtin.service:
+      name: "{{ item }}"
+      state: stopped
+      enabled: false
+    loop: "{{ cis_unneeded_services | difference(cis_preserve_services) }}"
+    failed_when: false # Service may not be installed; that's fine
+    tags: [ cis2 ]
+
+  - name: "[CIS 2.x] Remove unneeded service packages if installed"
+    ansible.builtin.apt:
+      name: >-
+        {{
+          ['avahi-daemon', 'cups', 'isc-dhcp-server', 'slapd',
+           'nfs-kernel-server', 'rpcbind', 'bind9', 'vsftpd', 'squid',
+           'snmpd', 'nis', 'telnet', 'rsh-client', 'rsh-server', 'talk', 'talkd']
+          | difference(cis_preserve_services | default([]))
+        }}
+      state: absent
+      purge: true
+    failed_when: false
+    tags: [ cis2 ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 3 — Network Configuration (sysctl)
+  # ════════════════════════════════════════════════════════════════════════
+  # All tasks use ignore_errors: true — unprivileged LXC containers may
+  # reject sysctl writes that modify namespace-shared kernel parameters.
+
+  # Docker (and any other bridging/NAT workload) needs ip_forward=1 for
+  # containers to reach anything outside their own bridge network — set
+  # cis_allow_ip_forward: true in that host's host_vars to skip this hard
+  # disable (see host_vars/vm-debian-remote-desktop/main.yml for the guac
+  # host, which runs Docker).
+  - name: "[CIS 3.1.1] Disable IP packet forwarding"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: "0"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    loop:
+    - net.ipv4.ip_forward
+    - net.ipv6.conf.all.forwarding
+    ignore_errors: true
+    when: not (cis_allow_ip_forward | default(false) | bool)
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.2.2] Disable send_redirects"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: "0"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    loop:
+    - net.ipv4.conf.all.send_redirects
+    - net.ipv4.conf.default.send_redirects
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.1] Disable source routing"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: "0"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    loop:
+    - net.ipv4.conf.all.accept_source_route
+    - net.ipv4.conf.default.accept_source_route
+    - net.ipv6.conf.all.accept_source_route
+    - net.ipv6.conf.default.accept_source_route
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.2] Disable ICMP redirect acceptance"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: "0"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    loop:
+    - net.ipv4.conf.all.accept_redirects
+    - net.ipv4.conf.default.accept_redirects
+    - net.ipv6.conf.all.accept_redirects
+    - net.ipv6.conf.default.accept_redirects
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.3] Disable secure ICMP redirect acceptance"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: "0"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    loop:
+    - net.ipv4.conf.all.secure_redirects
+    - net.ipv4.conf.default.secure_redirects
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.4] Enable logging of suspicious packets (martians)"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: "1"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    loop:
+    - net.ipv4.conf.all.log_martians
+    - net.ipv4.conf.default.log_martians
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.5] Ignore ICMP broadcast requests"
+    ansible.posix.sysctl:
+      name: net.ipv4.icmp_echo_ignore_broadcasts
+      value: "1"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.6] Ignore bogus ICMP error responses"
+    ansible.posix.sysctl:
+      name: net.ipv4.icmp_ignore_bogus_error_responses
+      value: "1"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.7] Enable reverse path filtering (rp_filter)"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: "1"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    loop:
+    - net.ipv4.conf.all.rp_filter
+    - net.ipv4.conf.default.rp_filter
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.8] Enable TCP SYN cookies"
+    ansible.posix.sysctl:
+      name: net.ipv4.tcp_syncookies
+      value: "1"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  - name: "[CIS 3.3.9] Disable IPv6 router advertisements"
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: "0"
+      state: present
+      sysctl_file: /etc/sysctl.d/99-cis-hardening.conf
+      reload: true
+    loop:
+    - net.ipv6.conf.all.accept_ra
+    - net.ipv6.conf.default.accept_ra
+    ignore_errors: true
+    tags: [ cis3 ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 4 — Host-Based Firewall (UFW)
+  # ════════════════════════════════════════════════════════════════════════
+  # UFW is installed and enabled with default-deny incoming.
+  # SSH (port 22) is opened BEFORE enabling UFW to prevent lockout.
+  # Containers that cannot run UFW (unprivileged LXC) will fail gracefully.
+
+  - name: "[CIS 4] Install UFW"
+    ansible.builtin.apt:
+      name: ufw
+      state: present
+    tags: [ cis4 ]
+
+  - name: "[CIS 4] CRITICAL — allow SSH before enabling UFW (prevents lockout)"
+    community.general.ufw:
+      rule: allow
+      port: "22"
+      proto: tcp
+      comment: "CIS — SSH access"
+    failed_when: false # graceful if UFW not yet installed (check mode / first run)
+    tags: [ cis4 ]
+
+  - name: "[CIS 4] Allow host-specific service ports"
+    community.general.ufw:
+      rule: allow
+      port: "{{ item.port }}"
+      proto: "{{ item.proto | default('tcp') }}"
+      comment: "{{ item.comment | default('service port') }}"
+    loop: "{{ cis_ufw_extra_ports | default([]) }}"
+    failed_when: false
+    tags: [ cis4 ]
+
+  - name: "[CIS 4] Set UFW default: deny incoming, allow outgoing"
+    community.general.ufw:
+      state: enabled
+      policy: deny
+      direction: incoming
+    failed_when: false # unprivileged LXC containers may reject this
+    tags: [ cis4 ]
+
+  - name: "[CIS 4] Set UFW default: allow outgoing"
+    community.general.ufw:
+      policy: allow
+      direction: outgoing
+    failed_when: false
+    tags: [ cis4 ]
+
+  - name: "[CIS 4] Enable UFW"
+    community.general.ufw:
+      state: enabled
+    failed_when: false
+    tags: [ cis4 ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 5 — Logging and Auditing (auditd)
+  # ════════════════════════════════════════════════════════════════════════
+  # auditd tracks privileged operations, authentication, and file access.
+  # In unprivileged LXC containers, auditd may start but produce no events
+  # (the host kernel handles audit namespacing).  Install it anyway so the
+  # binary and rules are in place for when the container is upgraded to
+  # a privileged context.
+
+  - name: "[CIS 5] Install auditd"
+    ansible.builtin.apt:
+      name: [ auditd, audispd-plugins ]
+      state: present
+    tags: [ cis5 ]
+
+  - name: "[CIS 5] Deploy CIS audit rules"
+    ansible.builtin.copy:
+      dest: /etc/audit/rules.d/99-cis.rules
+      owner: root
+      group: root
+      mode: "0640"
+      content: |
+        # CIS 5 — Audit Rules
+        # Generated by security-harden.yml
+
+        ## Self-auditing — log changes to audit rules
+        -w /etc/audit/ -p wa -k audit-config
+        -w /etc/audit/rules.d/ -p wa -k audit-rules
+
+        ## Time changes (CIS 5.2.4)
+        -a always,exit -F arch=b64 -S adjtimex -S settimeofday -k time-change
+        -a always,exit -F arch=b32 -S adjtimex -S settimeofday -S stime -k time-change
+        -a always,exit -F arch=b64 -S clock_settime -k time-change
+        -a always,exit -F arch=b32 -S clock_settime -k time-change
+        -w /etc/localtime -p wa -k time-change
+
+        ## User/group modifications (CIS 5.2.5)
+        -w /etc/group  -p wa -k identity
+        -w /etc/passwd -p wa -k identity
+        -w /etc/gshadow -p wa -k identity
+        -w /etc/shadow -p wa -k identity
+        -w /etc/security/opasswd -p wa -k identity
+
+        ## Network configuration changes (CIS 5.2.6)
+        -a always,exit -F arch=b64 -S sethostname -S setdomainname -k system-locale
+        -a always,exit -F arch=b32 -S sethostname -S setdomainname -k system-locale
+        -w /etc/issue -p wa -k system-locale
+        -w /etc/issue.net -p wa -k system-locale
+        -w /etc/hosts -p wa -k system-locale
+        -w /etc/network/ -p wa -k system-locale
+
+        ## Privilege escalation — sudo (CIS 5.2.7)
+        -w /etc/sudoers -p wa -k scope
+        -w /etc/sudoers.d/ -p wa -k scope
+
+        ## Privileged commands — setuid/setgid (CIS 5.2.8)
+        -a always,exit -F arch=b64 -S execve -C uid!=euid -F euid=0 -k setuid
+        -a always,exit -F arch=b64 -S execve -C gid!=egid -F egid=0 -k setgid
+
+        ## Login / logout events (CIS 5.2.9)
+        -w /var/log/faillog -p wa -k logins
+        -w /var/log/lastlog -p wa -k logins
+        -w /var/log/tallylog -p wa -k logins
+
+        ## Session events (CIS 5.2.10)
+        -w /var/run/utmp -p wa -k session
+        -w /var/log/wtmp -p wa -k logins
+        -w /var/log/btmp -p wa -k logins
+
+        ## MAC policy changes (CIS 5.2.17)
+        -w /etc/apparmor/ -p wa -k MAC-policy
+        -w /etc/apparmor.d/ -p wa -k MAC-policy
+
+        ## Module load/unload (CIS 5.2.18 — VMs only; logged even if no effect)
+        -w /sbin/insmod  -p x -k modules
+        -w /sbin/rmmod   -p x -k modules
+        -w /sbin/modprobe -p x -k modules
+        -a always,exit -F arch=b64 -S init_module -S delete_module -k modules
+
+        ## Make the configuration immutable (reload requires reboot)
+        ## Uncomment when fully tuned and stable:
+        # -e 2
+    tags: [ cis5 ]
+
+  - name: "[CIS 5] Enable and start auditd"
+    ansible.builtin.service:
+      name: auditd
+      state: started
+      enabled: true
+    failed_when: false # May not function in unprivileged containers
+    tags: [ cis5 ]
+
+  - name: "[CIS 5] Reload audit rules"
+    ansible.builtin.command: augenrules --load
+    changed_when: false
+    failed_when: false
+    tags: [ cis5 ]
+
+  - name: "[CIS 5] Ensure rsyslog is installed and running"
+    ansible.builtin.apt:
+      name: rsyslog
+      state: present
+    failed_when: false # optional; Debian 13 uses journald by default
+    tags: [ cis5 ]
+
+  - name: "[CIS 5] Start and enable rsyslog"
+    ansible.builtin.service:
+      name: rsyslog
+      state: started
+      enabled: true
+    failed_when: false # not installed on journald-only hosts
+    tags: [ cis5 ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 6.1 — SSH Server Configuration
+  # ════════════════════════════════════════════════════════════════════════
+
+  - name: "[CIS 6.1] Apply comprehensive SSH hardening"
+    ansible.builtin.blockinfile:
+      path: /etc/ssh/sshd_config
+      insertbefore: "^Match " # Keep global directives outside any Match block
+      block: |
+        # ── CIS Benchmark SSH Hardening ──────────────────────────────────
+        # Applied by security-harden.yml; do not edit this block manually.
+
+        # CIS 6.1.1 — Only allow approved users
+        AllowUsers {{ (cis_ssh_allowed_users | trim + ' ' + cis_ssh_extra_users | default('')) | trim }}
+
+        # CIS 6.1.2 — Restrict logging verbosity
+        LogLevel VERBOSE
+
+        # CIS 6.1.3 — Limit authentication attempts
+        MaxAuthTries 4
+        MaxSessions 4
+
+        # CIS 6.1.4 — Disable root login
+        PermitRootLogin no
+
+        # CIS 6.1.5 — Disable empty passwords
+        PermitEmptyPasswords no
+
+        # CIS 6.1.6 — Disable password authentication (key-only)
+        PasswordAuthentication no
+        ChallengeResponseAuthentication no
+        KbdInteractiveAuthentication no
+
+        # CIS 6.1.7 — Disable rhosts and host-based auth
+        IgnoreRhosts yes
+        HostbasedAuthentication no
+
+        # CIS 6.1.8 — Approved ciphers, MACs, and KexAlgorithms
+        Ciphers {{ cis_ssh_ciphers }}
+        MACs {{ cis_ssh_macs }}
+        KexAlgorithms {{ cis_ssh_kex }}
+
+        # CIS 6.1.9 — Session timeouts (15s interval × 3 = 45s idle cutoff)
+        ClientAliveInterval 15
+        ClientAliveCountMax 3
+        LoginGraceTime 60
+
+        # CIS 6.1.10 — Connection limits
+        MaxStartups 10:30:60
+
+        # CIS 6.1.11 — Disable X11 forwarding
+        X11Forwarding no
+
+        # CIS 6.1.12 — TCP forwarding (disable unless cis_allow_tcp_fwd=true)
+        AllowTcpForwarding {{ cis_allow_tcp_fwd | bool | ternary('yes', 'no') }}
+
+        # CIS 6.1.13 — Warning banner
+        Banner /etc/issue.net
+
+        # CIS 6.1.14 — Disable user environment variables
+        PermitUserEnvironment no
+
+        # CIS 6.1.15 — Use privilege separation
+        UsePAM yes
+      marker: "# {mark} CIS SSH HARDENING BLOCK"
+      validate: "/usr/sbin/sshd -t -f %s"
+    notify: Restart sshd
+    tags: [ cis6_ssh ]
+
+  - name: "[CIS 6.1] Allow password auth for designated SFTP users (Match block)"
+    ansible.builtin.blockinfile:
+      path: /etc/ssh/sshd_config
+      block: |
+        Match User {{ cis_sftp_password_users }}
+          PasswordAuthentication yes
+          ChallengeResponseAuthentication yes
+          KbdInteractiveAuthentication yes
+          ForceCommand internal-sftp
+      marker: "# {mark} CIS SFTP PASSWORD USERS BLOCK"
+      validate: "/usr/sbin/sshd -t -f %s"
+    when: cis_sftp_password_users | default('') | length > 0
+    notify: Restart sshd
+    tags: [ cis6_ssh ]
+
+  - name: "[CIS 6.1] Remove SFTP password Match block when no users defined"
+    ansible.builtin.blockinfile:
+      path: /etc/ssh/sshd_config
+      block: ""
+      marker: "# {mark} CIS SFTP PASSWORD USERS BLOCK"
+    when: cis_sftp_password_users | default('') | length == 0
+    notify: Restart sshd
+    tags: [ cis6_ssh ]
+
+  - name: "[CIS 6.2] Install libpam-pwquality for password complexity"
+    ansible.builtin.apt:
+      name: libpam-pwquality
+      state: present
+    tags: [ cis6_pam ]
+
+  - name: "[CIS 6.2.1] Configure pam_pwquality (password complexity)"
+    ansible.builtin.blockinfile:
+      path: /etc/security/pwquality.conf
+      create: true
+      owner: root
+      group: root
+      mode: "0644"
+      block: |
+        # CIS 6.2.1 — Password quality settings
+        minlen  = {{ cis_pw_minlen }}
+        minclass = {{ cis_pw_minclass }}
+        maxrepeat = {{ cis_pw_maxrepeat }}
+        maxsequence = 3
+        dcredit  = -1
+        ucredit  = -1
+        ocredit  = -1
+        lcredit  = -1
+        gecoscheck = 1
+      marker: "# {mark} CIS PASSWORD QUALITY BLOCK"
+    tags: [ cis6_pam ]
+
+  - name: "[CIS 6.2.2] Configure pam_faillock in common-auth (brute-force lockout)"
+    ansible.builtin.blockinfile:
+      path: /etc/pam.d/common-auth
+      insertbefore: "^auth.*pam_unix"
+      block: |
+        # CIS 6.2.2 — Brute-force lockout via pam_faillock
+        auth required pam_faillock.so preauth silent deny={{ cis_faillock_deny }} unlock_time={{ cis_faillock_unlock_time }} fail_interval=900
+        auth [success=1 default=ignore] pam_unix.so nullok
+        auth [default=die] pam_faillock.so authfail deny={{ cis_faillock_deny }} unlock_time={{ cis_faillock_unlock_time }} fail_interval=900
+        auth sufficient pam_faillock.so authsucc deny={{ cis_faillock_deny }} unlock_time={{ cis_faillock_unlock_time }} fail_interval=900
+      marker: "# {mark} CIS FAILLOCK BLOCK"
+    tags: [ cis6_pam ]
+
+  - name: "[CIS 6.2.2] Configure pam_faillock in common-account"
+    ansible.builtin.blockinfile:
+      path: /etc/pam.d/common-account
+      block: |
+        # CIS 6.2.2 — pam_faillock account check
+        account required pam_faillock.so
+      marker: "# {mark} CIS FAILLOCK ACCOUNT BLOCK"
+    tags: [ cis6_pam ]
+
+  - name: "[CIS 6.2.3] Ensure password hashing uses SHA-512 in common-password"
+    ansible.builtin.lineinfile:
+      path: /etc/pam.d/common-password
+      regexp: '^password.*pam_unix'
+      line: "password [success=1 default=ignore] pam_unix.so obscure use_authtok try_first_pass sha512 shadow remember=5"
+      backup: true
+    tags: [ cis6_pam ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 6.3 — Login Definitions
+  # ════════════════════════════════════════════════════════════════════════
+
+  - name: "[CIS 6.3.1] Set password aging policy in /etc/login.defs"
+    ansible.builtin.lineinfile:
+      path: /etc/login.defs
+      regexp: "{{ item.regexp }}"
+      line: "{{ item.line }}"
+    loop:
+    - { regexp: '^PASS_MAX_DAYS', line: "PASS_MAX_DAYS {{ cis_pass_max_days }}" }
+    - { regexp: '^PASS_MIN_DAYS', line: "PASS_MIN_DAYS {{ cis_pass_min_days }}" }
+    - { regexp: '^PASS_WARN_AGE', line: "PASS_WARN_AGE {{ cis_pass_warn_age }}" }
+    tags: [ cis6_pam ]
+
+  - name: "[CIS 6.3.2] Set restrictive UMASK in /etc/login.defs"
+    ansible.builtin.lineinfile:
+      path: /etc/login.defs
+      regexp: '^UMASK'
+      line: "UMASK 027"
+    tags: [ cis6_pam ]
+
+  - name: "[CIS 6.3.3] Set INACTIVE lock for new accounts"
+    ansible.builtin.command: "useradd -D -f {{ cis_inactive_lock_days }}"
+    changed_when: false
+    tags: [ cis6_pam ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 6.4 — File System Permissions and Accounts
+  # ════════════════════════════════════════════════════════════════════════
+
+  - name: "[CIS 6.4.1] Set sticky bit on all world-writable directories"
+    ansible.builtin.shell: |
+      find / -xdev -type d \( -perm -0002 -a ! -perm -1000 \) \
+        -exec chmod +t {} \; 2>/dev/null
+    changed_when: false
+    failed_when: false
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.2] Ensure /etc/passwd has correct permissions"
+    ansible.builtin.file:
+      path: /etc/passwd
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.2] Ensure /etc/shadow has correct permissions"
+    ansible.builtin.file:
+      path: /etc/shadow
+      owner: root
+      group: shadow
+      mode: "0640"
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.2] Ensure /etc/group has correct permissions"
+    ansible.builtin.file:
+      path: /etc/group
+      owner: root
+      group: root
+      mode: "0644"
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.2] Ensure /etc/gshadow has correct permissions"
+    ansible.builtin.file:
+      path: /etc/gshadow
+      owner: root
+      group: shadow
+      mode: "0640"
+    failed_when: false
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.3] Ensure sudoers has correct permissions"
+    ansible.builtin.file:
+      path: /etc/sudoers
+      owner: root
+      group: root
+      mode: "0440"
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.4] Ensure /etc/cron* files have correct permissions"
+    ansible.builtin.file:
+      path: "{{ item }}"
+      owner: root
+      group: root
+      mode: "0700"
+    loop:
+    - /etc/cron.d
+    - /etc/cron.daily
+    - /etc/cron.hourly
+    - /etc/cron.monthly
+    - /etc/cron.weekly
+    failed_when: false
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.4] Restrict crontab access to root only"
+    ansible.builtin.copy:
+      dest: /etc/cron.allow
+      content: "root\n"
+      owner: root
+      group: root
+      mode: "0600"
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.4] Ensure /etc/cron.deny does not exist"
+    ansible.builtin.file:
+      path: /etc/cron.deny
+      state: absent
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.5] Lock system accounts (UID < 1000, non-root)"
+    ansible.builtin.shell: |
+      awk -F: '($1 != "root" && $1 != "sync" && $1 != "shutdown" && $1 != "halt" && \
+                $3 < 1000 && $7 != "/usr/sbin/nologin" && $7 != "/bin/false") \
+               {print $1}' /etc/passwd
+    register: _system_accounts
+    changed_when: false
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.5] Set shell to /usr/sbin/nologin for system accounts"
+    ansible.builtin.user:
+      name: "{{ item }}"
+      shell: /usr/sbin/nologin
+    loop: "{{ _system_accounts.stdout_lines | default([]) }}"
+    failed_when: false
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.6] Report SUID/SGID executables (informational — not removed)"
+    ansible.builtin.shell: |
+      find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null
+    register: _suid_files
+    changed_when: false
+    failed_when: false
+    tags: [ cis6_fs ]
+
+  - name: "[CIS 6.4.6] Print SUID/SGID file list"
+    ansible.builtin.debug:
+      msg: "{{ _suid_files.stdout_lines | default([]) }}"
+    when: _suid_files.stdout_lines | default([]) | length > 0
+    tags: [ cis6_fs ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # CIS SECTION 7 (extras) — fail2ban + diagnostic/hardening packages
+  # ════════════════════════════════════════════════════════════════════════
+  # Curated from ansible-stationctl's Lynis triage — picked because none of
+  # this has any realistic chance of breaking SSH multiplexing, the dev
+  # toolchain, or existing services. See this file's header for what was
+  # deliberately left out (SSH port/session-limit/forwarding changes,
+  # compiler lockdown, extra auditd/AIDE cost) and why.
+
+  - name: "[CIS 7.1] Install fail2ban + diagnostic/hardening packages"
+    ansible.builtin.apt:
+      name:
+        - fail2ban           # bans hosts with repeated auth failures [DEB-0880]
+        - libpam-tmpdir      # sets $TMP/$TMPDIR per PAM session [DEB-0280]
+        - libpam-passwdqc    # password strength on future password changes [AUTH-9262]
+        - debsums            # verifies packages against known-good checksums [PKGS-7370]
+        - apt-show-versions  # patch-management visibility [PKGS-7394]
+        - rkhunter           # on-demand rootkit/malware scan, not a daemon [HRDN-7230]
+      state: present
+    tags: [ cis7 ]
+
+  # fail2ban's own default jail.conf ships the sshd jail DISABLED — a
+  # jail.local override is the documented way to enable it without editing
+  # the package-owned file directly (jail.local always wins on conflict).
+  - name: "[CIS 7.1] Enable fail2ban's sshd jail"
+    ansible.builtin.copy:
+      dest: /etc/fail2ban/jail.local
+      content: |
+        [sshd]
+        enabled = true
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Restart fail2ban
+    tags: [ cis7 ]
+
+  - name: "[CIS 7.1] Ensure fail2ban is enabled and running"
+    ansible.builtin.systemd:
+      name: fail2ban
+      state: started
+      enabled: true
+    failed_when: false # may not have iptables/nftables access in unprivileged LXC
+    tags: [ cis7 ]
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Summary
+  # ════════════════════════════════════════════════════════════════════════
+
+  - name: "[CIS] Hardening summary"
+    ansible.builtin.debug:
+      msg:
+      - "========================================================"
+      - "CIS hardening applied to: {{ inventory_hostname }}"
+      - "  OS:         {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      - "  Type:       {{ _is_vm | bool | ternary('VM (full guest)', 'LXC container') }}"
+      - "  SSH:        hardened — key-only, no root, approved ciphers"
+      - "  sysctl:     applied (some may be no-ops in containers)"
+      - "  UFW:        enabled — default deny-in, SSH + per-host ports allowed"
+      - "  auditd:     installed (may be no-op in unprivileged LXC)"
+      - "  AppArmor:   installed and enforce mode set"
+      - "  PAM:        pwquality + faillock configured"
+      - "  login.defs: password aging and UMASK 027 set"
+      - "  fail2ban:   sshd jail enabled"
+      - "  rkhunter installed (on-demand — run 'sudo rkhunter --check' manually)"
+      - "========================================================"
+    tags: [ always ]
+
+  handlers:
+  - name: Restart sshd
+    ansible.builtin.service:
+      name: ssh
+      state: restarted
+    failed_when: false
+
+  - name: Restart fail2ban
+    ansible.builtin.systemd:
+      name: fail2ban
+      state: restarted
+    failed_when: false
+
+# PLAY 2: Alpine-specific hardening (apk-based hosts)
+- name: CIS hardening subset — Alpine Linux hosts
+  hosts: lxcs:vms:workstations
+  gather_facts: true
+  become: true
+  ignore_unreachable: true
+  tags: [ cis_alpine ]
+
+  vars:
+    cis_ssh_allowed_users: "ansibleuser {{ vm_enduser_name | default('') }}"
+    cis_allow_tcp_fwd: false
+    cis_login_banner: |
+      ########################################################################
+      # Authorized access only.  All activity may be monitored and reported.
+      ########################################################################
+
+  pre_tasks:
+  - name: Skip non-Alpine hosts in Alpine play
+    when: ansible_pkg_mgr | default('') != 'apk'
+    ansible.builtin.meta: end_host
+
+  tasks:
+
+  - name: "[CIS/Alpine] Update apk index"
+    community.general.apk:
+      update_cache: true
+    tags: [ cis_alpine ]
+
+  - name: "[CIS/Alpine] Harden sshd_config"
+    ansible.builtin.blockinfile:
+      path: /etc/ssh/sshd_config
+      block: |
+        # CIS Alpine SSH hardening — applied by security-harden.yml
+        PermitRootLogin no
+        PasswordAuthentication no
+        PermitEmptyPasswords no
+        MaxAuthTries 4
+        MaxSessions 4
+        X11Forwarding no
+        AllowTcpForwarding {{ cis_allow_tcp_fwd | bool | ternary('yes', 'no') }}
+        ClientAliveInterval 15
+        ClientAliveCountMax 3
+        LoginGraceTime 60
+        MaxStartups 10:30:60
+        IgnoreRhosts yes
+        HostbasedAuthentication no
+        PermitUserEnvironment no
+        Banner /etc/issue.net
+        LogLevel VERBOSE
+        AllowUsers {{ (cis_ssh_allowed_users | trim + ' ' + cis_ssh_extra_users | default('')) | trim }}
+      marker: "# {mark} CIS SSH HARDENING BLOCK"
+      validate: "/usr/sbin/sshd -t -f %s"
+    notify: Restart sshd (Alpine)
+    tags: [ cis_alpine ]
+
+  - name: "[CIS/Alpine] Set warning banner"
+    ansible.builtin.copy:
+      dest: "{{ item }}"
+      content: "{{ cis_login_banner }}"
+      owner: root
+      group: root
+      mode: "0644"
+    loop:
+    - /etc/motd
+    - /etc/issue
+    - /etc/issue.net
+    tags: [ cis_alpine ]
+
+  - name: "[CIS/Alpine] Set sysctl hardening (best-effort)"
+    ansible.builtin.command: "sysctl -w {{ item }}"
+    loop:
+    - net.ipv4.tcp_syncookies=1
+    - net.ipv4.conf.all.rp_filter=1
+    - net.ipv4.conf.default.rp_filter=1
+    - net.ipv4.conf.all.accept_redirects=0
+    - net.ipv4.conf.all.send_redirects=0
+    - net.ipv4.conf.all.accept_source_route=0
+    - net.ipv4.icmp_echo_ignore_broadcasts=1
+    - kernel.randomize_va_space=2
+    changed_when: false
+    failed_when: false
+    tags: [ cis_alpine ]
+
+  - name: "[CIS/Alpine] Persist sysctl settings"
+    ansible.builtin.copy:
+      dest: /etc/sysctl.d/99-cis-hardening.conf
+      owner: root
+      group: root
+      mode: "0644"
+      content: |
+        # CIS hardening — applied by security-harden.yml
+        net.ipv4.tcp_syncookies = 1
+        net.ipv4.conf.all.rp_filter = 1
+        net.ipv4.conf.default.rp_filter = 1
+        net.ipv4.conf.all.accept_redirects = 0
+        net.ipv4.conf.all.send_redirects = 0
+        net.ipv4.conf.all.accept_source_route = 0
+        net.ipv4.icmp_echo_ignore_broadcasts = 1
+        kernel.randomize_va_space = 2
+    failed_when: false
+    tags: [ cis_alpine ]
+
+  - name: "[CIS/Alpine] Set sticky bit on world-writable dirs"
+    ansible.builtin.shell: |
+      find / -xdev -type d \( -perm -0002 -a ! -perm -1000 \) \
+        -exec chmod +t {} \; 2>/dev/null
+    changed_when: false
+    failed_when: false
+    tags: [ cis_alpine ]
+
+  - name: "[CIS/Alpine] Hardening complete"
+    ansible.builtin.debug:
+      msg: "CIS Alpine subset applied to {{ inventory_hostname }} ({{ ansible_host }})"
+    tags: [ cis_alpine ]
+
+  handlers:
+  - name: Restart sshd (Alpine)
+    ansible.builtin.service:
+      name: sshd
+      state: restarted

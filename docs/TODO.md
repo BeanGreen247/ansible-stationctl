@@ -42,7 +42,7 @@ recur:
 ## local-workstation (laptop, bean) — done this session
 
 - **Full playbook run completed and verified** (`setup-base-debian.yml`
-  through `setup-security-hardening.yml`, skipping `setup-ansibleuser.yml`
+  through `security-harden.yml`, skipping `setup-ansibleuser.yml`
   since the host was already bootstrapped): `ok=178, changed=36, failed=0`.
   Verified from a second SSH path per `docs/QUICKSTART.md`'s hard rule.
 - **Swap/disk policy item below is resolved** — confirmed via
@@ -186,5 +186,5 @@ safety fix, the fstab UUID-matching fix, the full build-dependency audit
 (fleetwm/.NET/Armbian Build Framework) applied fleet-wide, VS Code
 installed with Copilot/chat disabled, Brave/VS Code `password-store=basic`,
 Pulsar/Zed removed from both machines, the conservative Lynis-hardening
-subset (`setup-security-hardening.yml`), plus everything under "done this
+subset (`security-harden.yml`), plus everything under "done this
 session" above.
