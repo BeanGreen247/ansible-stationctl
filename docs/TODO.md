@@ -5,6 +5,45 @@ and the full non-bootstrap playbook set has now run against it end to end).
 
 ---
 
+## 2026-09-21: security-harden.yml consolidated with ansible-proxmox
+
+`setup-security-hardening.yml` is gone — replaced by `security-harden.yml`,
+kept byte-for-byte identical to ansible-proxmox's copy of the same file
+(no symlink/submodule; copy by hand to the other repo when either changes).
+See `docs/FIREWALL-PORTS.md` for the per-host port reference and how to
+add a new one.
+
+- **Applied to `local-workstation`**: `ok=68, changed=40, failed=0`.
+  Verified after: SSH/ping reachable, UFW active (default deny-in, 22+5901
+  allowed), fail2ban active, TigerVNC still listening. This was the first
+  firewall this host has ever had.
+- **`remote-workstation` deliberately NOT applied yet** — this session ran
+  from that VM, so untested SSH/firewall changes there carried a real
+  self-lockout risk with no console fallback. Needs a fresh explicit
+  go-ahead before running `ansible-playbook security-harden.yml --limit
+  remote-workstation`; don't assume it's covered just because
+  local-workstation is done.
+- **Two bugs found (via `--check --diff`, before either could cause real
+  damage) and fixed in both repos' copies of the file**:
+  1. `cis_preserve_services` was a play var, and Ansible's precedence puts
+     play vars above host_vars — so a host_vars override of it was always
+     silently ignored. This had *already* let a real run purge `vsftpd`
+     entirely off two ansible-proxmox hosts before this was caught. Fixed
+     via a `cis_preserve_services_baseline` + `cis_preserve_services_extra`
+     merge that host_vars can actually affect. (FTP restored on those two
+     hosts via ansible-proxmox's new `restore-vsftpd.yml`.)
+  2. `_is_vm`/`_is_lxc` used `groups['vms']`/`groups['lxcs']` directly,
+     which throws instead of evaluating false in this repo's inventory
+     (only `workstations` exists here) — hit applying to
+     `local-workstation` for the first time. Fixed with `groups.get(x, [])`.
+- Also reconciled ansible-proxmox's per-host `cis_ufw_extra_ports` against
+  live `ss`/`ufw status` + each VM's own Proxmox Notes field across all 10
+  of its LXCs/VMs — not relevant to this repo's own two hosts beyond the
+  VNC port already declared, but the same audit method is documented in
+  `docs/FIREWALL-PORTS.md` if this repo's hosts ever need it again.
+
+---
+
 ## 2026-09-20: VS Code hardening + editor-to-editor SSH (not Ansible-tracked)
 
 Settings Sync was found to be signed into the same GitHub account on both
