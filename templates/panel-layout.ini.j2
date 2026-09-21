@@ -30,6 +30,9 @@ expand=true
 # 'menu-bar' object-type — the stock menu has no search/filter at all and
 # no favorites; mate-menu adds both plus one-click uninstall, at the cost
 # of one extra package (python3-based, negligible RAM on these boxes).
+# Its favorites shortlist (right-click any app -> "Add to Favorites") is
+# stored per-user in ~/.config/mate-menu/applications.list, seeded by
+# setup-mate-desktop.yml.
 [org/mate/panel/objects/mate-menu]
 object-type='applet'
 applet-iid='MateMenuAppletFactory::MateMenuApplet'

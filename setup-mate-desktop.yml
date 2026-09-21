@@ -557,6 +557,33 @@
       mode: "0755"
     tags: [mate, dconf]
 
+  - name: Ensure end-user's ~/.config/mate-menu directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/mate-menu"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, panel, favorites]
+
+  # applications.list is MateMenu's own state file — it also rewrites this
+  # itself whenever a user right-clicks "Add/Remove from Favorites", so
+  # force:false only seeds the default shortlist on first login and never
+  # clobbers what a user has since customized on a later playbook re-run.
+  - name: Seed the MateMenu favorites shortlist (best-effort default)
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/mate-menu/applications.list"
+      content: |
+        separator
+        {{ mate_menu_favorites | map('regex_replace', '^', 'location:') | join('\n') }}
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, panel, favorites]
+
   - name: Lock panel layout and theme keys so they survive login resets
     ansible.builtin.copy:
       dest: /etc/dconf/db/local.d/locks/00-stationctl

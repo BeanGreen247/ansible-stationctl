@@ -223,6 +223,20 @@ mate_marco_theme: "Arc-Dark"
 mate_icon_theme: "Papirus-Dark"
 mate_compositing_enabled: false
 
+# MateMenu favorites shortlist — a .desktop file path per entry, seeded to
+# ~/.config/mate-menu/applications.list (setup-mate-desktop.yml). Matches
+# what's pinned live on vm-debian-workstation-01. Written with force:false
+# so it only seeds a default on first login; a user's own
+# "Add/Remove Favorites" clicks afterward aren't clobbered by later re-runs.
+mate_menu_favorites:
+  - /usr/share/applications/mate-terminal.desktop
+  - /usr/share/applications/caja-browser.desktop
+  - /usr/share/applications/brave-browser.desktop
+  - /usr/share/applications/filezilla.desktop
+  - /usr/share/applications/org.keepassxc.KeePassXC.desktop
+  - /usr/share/applications/org.xfce.mousepad.desktop
+  - /usr/share/applications/code.desktop
+
 # System-wide monospace font — a Nerd Font *Mono* variant so terminal apps
 # get code + icon glyphs (Powerline, devicons, etc.) from a single font
 # instead of relying on fontconfig fallback picking the right glyph from a
@@ -286,7 +300,7 @@ dev_packages:
   - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
   - idle          # provides idlelib, used by some homegrown editor scripts
   - keepassxc
-  - filezilla     # GUI FTP/SFTP client
+  - filezilla     # GUI FTP/SFTP client — also pinned in the MateMenu favorites shortlist
   # Required by both VS Code markdown extensions' PDF/DOCX export path
   # (shd101wyy.markdown-preview-enhanced, yzhang.markdown-all-in-one) — found
   # missing 2026-09-18 during a full extension-dependency audit. Everything
