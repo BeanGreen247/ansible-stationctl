@@ -199,9 +199,13 @@
     - jffs2
     - squashfs
     - udf
-    # Convenience flags
-    _is_vm: "{{ inventory_hostname in groups['vms'] }}"
-    _is_lxc: "{{ inventory_hostname in groups['lxcs'] }}"
+    # Convenience flags — groups.get(...) not groups['...'], since the
+    # 'vms'/'lxcs' groups don't exist at all in ansible-stationctl's
+    # inventory (only 'workstations' does); a bare subscript there throws
+    # instead of just evaluating false (caught running this against
+    # local-workstation 2026-09-21).
+    _is_vm: "{{ inventory_hostname in groups.get('vms', []) }}"
+    _is_lxc: "{{ inventory_hostname in groups.get('lxcs', []) }}"
     # ── Per-host service ports to allow through UFW ───────────────────────
     # Override in host_vars/<host>/main.yml — example:
     #   cis_ufw_extra_ports:
