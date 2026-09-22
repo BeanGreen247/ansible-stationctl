@@ -332,6 +332,11 @@ dev_packages:
   - libpipewire-0.3-dev
   - libgtk4-layer-shell-dev
   - libpam0g-dev
+  # WebKit2GTK bindings — GTK/WebKit2 backend for pywebview (used by Claude
+  # Code's memory "brain" visualization, ~/.claude/scripts/brain_window.py,
+  # to render its graph in a native window instead of a browser tab).
+  - gir1.2-webkit2-4.1
+  - libwebkit2gtk-4.1-0
 
 # ---------------------------------------------------------------------------
 # Armbian Build Framework host deps (LukyStuff/Debian-build-server/build,
