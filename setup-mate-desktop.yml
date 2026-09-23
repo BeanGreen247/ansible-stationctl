@@ -512,17 +512,107 @@
   # reliably survive a reboot. Back to mate-power-manager's own status
   # icon as the one battery indicator instead. Harmless to set on hosts
   # where mate-power-manager never autostarts (VMs) — nothing reads it.
+  # sleep-computer-ac was left at its package default (0/disabled) —
+  # harmless on its own, but it meant any tool reading "is this machine
+  # set to sleep normally" (e.g. the Lock Status panel applet) could
+  # never see a normal/active state, only ever "disabled". These are
+  # remotely-accessed boxes (VNC/Guacamole), so real suspend is still
+  # undesirable — 1h is long enough to never trigger in practice while
+  # giving tooling a real "enabled" value to read.
   - name: Show mate-power-manager's own status icon (the one battery indicator)
     ansible.builtin.copy:
       dest: /etc/dconf/db/local.d/05-power-manager-icon
       content: |
         [org/mate/power-manager]
         icon-policy='present'
+        sleep-computer-ac=3600
       owner: root
       group: root
       mode: "0644"
     notify: Update dconf databases
     tags: [mate, power, dconf]
+
+  # Custom panel applet: shows a padlock icon reflecting whether
+  # screen-lock/sleep-timer settings are active or disabled/inhibited
+  # (crossed-out lock, KDE-powerdevil-style), with a per-timer tooltip and
+  # a click-to-pause toggle. Reads org.mate.power-manager directly, so
+  # it's bare-metal-only, same gate as the package itself two tasks up —
+  # on a VM (no mate-power-manager, no GSettings schema for it) this
+  # would crash on startup. MATE panel only discovers applet definitions
+  # under /usr/share (not a user's ~/.local/share), confirmed live on
+  # local-workstation 2026-09-23 — hence installing straight to
+  # /usr/local/share and /usr/share here rather than a per-user path.
+  - name: Ensure Lock Status applet source directory exists
+    ansible.builtin.file:
+      path: /usr/local/share/stationctl/lock-status-applet
+      state: directory
+      owner: root
+      group: root
+      mode: "0755"
+    when: machine_role == 'bare-metal'
+    tags: [mate, power, panel]
+
+  - name: Deploy Lock Status applet source
+    ansible.builtin.copy:
+      src: "files/mate-desktop/lock-status-applet/{{ item }}"
+      dest: "/usr/local/share/stationctl/lock-status-applet/{{ item }}"
+      owner: root
+      group: root
+      mode: "0644"
+    loop:
+      - lock_status_state.py
+      - lock_status_icon.py
+      - lock_status_widget.py
+    when: machine_role == 'bare-metal'
+    tags: [mate, power, panel]
+
+  # Separate task, not folded into the loop above, so its mode (0755, it's
+  # the D-Bus-activated entry point) doesn't fight the other files' 0644
+  # across runs -- two tasks disagreeing on one file's mode is a classic
+  # idempotency flip-flop (caught live by run_playbook.py's --check
+  # re-verify 2026-09-23).
+  - name: Deploy Lock Status applet entry point (executable)
+    ansible.builtin.copy:
+      src: files/mate-desktop/lock-status-applet/lock_status_applet.py
+      dest: /usr/local/share/stationctl/lock-status-applet/lock_status_applet.py
+      owner: root
+      group: root
+      mode: "0755"
+    when: machine_role == 'bare-metal'
+    tags: [mate, power, panel]
+
+  - name: Register Lock Status applet with mate-panel
+    ansible.builtin.copy:
+      dest: /usr/share/mate-panel/applets/org.local.LockStatusApplet.mate-panel-applet
+      content: |
+        [Applet Factory]
+        Id=LockStatusAppletFactory
+        Location=/usr/local/share/stationctl/lock-status-applet/lock_status_applet.py
+        Name=Lock Status Applet Factory
+        Description=Factory for the Lock Status applet
+
+        [LockStatusApplet]
+        Name=Lock Status
+        Description=Shows whether screen-lock and sleep timers are active or inhibited
+        Icon=changes-prevent-symbolic
+      owner: root
+      group: root
+      mode: "0644"
+    when: machine_role == 'bare-metal'
+    tags: [mate, power, panel]
+
+  - name: Register Lock Status applet D-Bus activation service
+    ansible.builtin.copy:
+      dest: /usr/share/dbus-1/services/org.mate.panel.applet.LockStatusAppletFactory.service
+      content: |
+        [D-BUS Service]
+        Name=org.mate.panel.applet.LockStatusAppletFactory
+        Exec=/usr/local/share/stationctl/lock-status-applet/lock_status_applet.py
+      owner: root
+      group: root
+      mode: "0644"
+    when: machine_role == 'bare-metal'
+    tags: [mate, power, panel]
 
   # blueman's Bluetooth icon defaults to StatusNotifierItem (SNI), sharing
   # the single indicators/mate-indicator-applet-complete host with the

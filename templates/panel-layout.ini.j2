@@ -1,6 +1,6 @@
 [org/mate/panel/general]
 toplevel-id-list=['bottom']
-object-id-list=['mate-menu', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor', 'clock']
+object-id-list=['mate-menu', 'window-list', 'notification-area', 'indicators', 'ram-status', 'sysmonitor'{{ ", 'lock-status'" if machine_role == 'bare-metal' else '' }}, 'clock']
 # Per-object locked=true (below) only blocks dragging/moving — it does
 # NOT block "Remove From Panel" from the right-click menu, which is
 # exactly how notification-area got dropped from object-id-list above
@@ -107,6 +107,22 @@ view-diskload=false
 view-loadavg=false
 speed=2000
 size=40
+
+{% if machine_role == 'bare-metal' %}
+# Lock Status applet (setup-mate-desktop.yml) -- reads org.mate.power-manager
+# directly, so bare-metal only (no mate-power-manager/GSettings schema on
+# VMs). position/relative-to-edge/panel-right-stick match the combination
+# confirmed live via dconf + screenshot on local-workstation 2026-09-23 to
+# land it between sysmonitor and clock.
+[org/mate/panel/objects/lock-status]
+object-type='applet'
+applet-iid='LockStatusAppletFactory::LockStatusApplet'
+toplevel-id='bottom'
+position=2
+relative-to-edge='end'
+panel-right-stick=false
+locked=true
+{% endif %}
 
 [org/mate/panel/objects/clock]
 object-type='applet'
