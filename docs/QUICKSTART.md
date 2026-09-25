@@ -90,7 +90,7 @@ scripts/test_playbooks.sh
 ## Hard rule: never break access
 
 Any change touching SSH (`sshd_config`, `setup-base-debian.yml`,
-`setup-security-hardening.yml`), VNC (`setup-remote-access.yml`), PAM, or
+`security-harden.yml`), VNC (`setup-remote-access.yml`), PAM, or
 network/firewall config follows this sequence, no exceptions:
 
 1. **Research first.** Read the docs for whatever's being changed
@@ -130,7 +130,7 @@ If a change can't be verified this way (e.g. the target host is the only
 one you can reach, no second path exists), that's a reason to be *more*
 conservative, not less — prefer the smallest change that gets the Lynis/
 hardening benefit, matching the existing triage in
-`setup-security-hardening.yml`'s header comment.
+`security-harden.yml`'s header comment.
 
 ---
 

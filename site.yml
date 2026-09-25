@@ -36,5 +36,5 @@
   import_playbook: setup-kernel-perf-tuning.yml
 - name: Dev applets (apt-key-refresh, dotfile-sync, status trays)
   import_playbook: setup-dev-applets.yml
-- name: Security hardening (conservative Lynis-suggestion subset)
-  import_playbook: setup-security-hardening.yml
+- name: Security hardening (CIS + Lynis-suggestion extras — shared with ansible-proxmox)
+  import_playbook: security-harden.yml

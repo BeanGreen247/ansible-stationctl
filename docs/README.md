@@ -210,6 +210,8 @@ See [`docs/INVENTORY-CONSOLIDATION.md`](INVENTORY-CONSOLIDATION.md) for an open 
 
 See [`docs/BRAINSTORM-COMPARISON.md`](BRAINSTORM-COMPARISON.md) for a research-backed comparison against comparable public projects (community-scripts/ProxmoxVE, chezmoi, home-manager, etc.) and ranked ideas for what would make this setup distinctive — prep work for a future website writeup, not yet acted on.
 
+See [`docs/FIREWALL-PORTS.md`](FIREWALL-PORTS.md) for how to add or change a `security-harden.yml` UFW port on `remote-workstation`/`local-workstation`, and the current per-host port table.
+
 ## Support
 
 If this project is useful to you, consider supporting its development via PayPal:

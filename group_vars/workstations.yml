@@ -217,11 +217,41 @@ mate_packages:
   - mate-menu           # replaces the stock menu-bar applet — categorized/searchable app
                          # browser (Linux Mint's MATE menu, ported upstream), favorites +
                          # easy-uninstall; stock menu-bar has no search at all
+  - mate-utils          # provides mate-screenshot — region-select screenshot tool
+                         # (Win+Shift+S-style), no persistent daemon/tray icon like
+                         # flameshot (tried first, reverted 2026-09-25). See the
+                         # keybinding-commands/mate-menu-favorites tasks in
+                         # setup-mate-desktop.yml
+  - vlc                 # media player
+  - gpicview             # minimal image viewer (ristretto-equivalent) — chosen over
+                         # ristretto itself, which pulls in libxfce4ui/libxfconf
+                         # (the Xfce lib chain this repo otherwise avoids); gpicview
+                         # has no desktop-toolkit deps beyond GTK3
 
 mate_gtk_theme: "Arc-Dark"
 mate_marco_theme: "Arc-Dark"
 mate_icon_theme: "Papirus-Dark"
 mate_compositing_enabled: false
+
+# MateMenu favorites shortlist — a .desktop file path per entry, seeded to
+# ~/.config/mate-menu/applications.list (setup-mate-desktop.yml). Matches
+# what's pinned live on vm-debian-workstation-01. Written with force:false
+# so it only seeds a default on first login; a user's own
+# "Add/Remove Favorites" clicks afterward aren't clobbered by later re-runs.
+mate_menu_favorites:
+  - /usr/share/applications/mate-terminal.desktop
+  - /usr/share/applications/caja-browser.desktop
+  - /usr/share/applications/brave-browser.desktop
+  - /usr/share/applications/filezilla.desktop
+  - /usr/share/applications/org.keepassxc.KeePassXC.desktop
+  - /usr/share/applications/org.xfce.mousepad.desktop
+  - /usr/share/applications/code.desktop
+  # NOT mate-screenshot's own shipped .desktop — its default Exec is
+  # `--interactive` (a picker dialog + save-as prompt), not the direct
+  # region-select the Win+Shift+S binding gives. stationctl-screenshot.desktop
+  # (setup-mate-desktop.yml) runs `mate-screenshot --area --clipboard`
+  # directly, matching the keybinding.
+  - /usr/share/applications/stationctl-screenshot.desktop
 
 # System-wide monospace font — a Nerd Font *Mono* variant so terminal apps
 # get code + icon glyphs (Powerline, devicons, etc.) from a single font
@@ -286,7 +316,7 @@ dev_packages:
   - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
   - idle          # provides idlelib, used by some homegrown editor scripts
   - keepassxc
-  - filezilla     # GUI FTP/SFTP client
+  - filezilla     # GUI FTP/SFTP client — also pinned in the MateMenu favorites shortlist
   # Required by both VS Code markdown extensions' PDF/DOCX export path
   # (shd101wyy.markdown-preview-enhanced, yzhang.markdown-all-in-one) — found
   # missing 2026-09-18 during a full extension-dependency audit. Everything
@@ -318,6 +348,11 @@ dev_packages:
   - libpipewire-0.3-dev
   - libgtk4-layer-shell-dev
   - libpam0g-dev
+  # WebKit2GTK bindings — GTK/WebKit2 backend for pywebview (used by Claude
+  # Code's memory "brain" visualization, ~/.claude/scripts/brain_window.py,
+  # to render its graph in a native window instead of a browser tab).
+  - gir1.2-webkit2-4.1
+  - libwebkit2gtk-4.1-0
 
 # ---------------------------------------------------------------------------
 # Armbian Build Framework host deps (LukyStuff/Debian-build-server/build,
@@ -540,6 +575,58 @@ sysadmin_cli_packages:
   - libnotify-bin
 
 # ---------------------------------------------------------------------------
+# Build dependencies for compiling FOSS game engines/source ports from
+# source (World of Padman, Yamagi Quake II, and similar SDL2/OpenAL-based
+# projects) — requested 2026-09-21 to have these ready fleet-wide rather
+# than installing per-machine when a build is actually attempted.
+#
+# dialog, zlib1g-dev, xz-utils, and unzip are already covered by
+# armbian_build_framework_packages above — omitted here to avoid a
+# duplicate apt task; everything else from the requested list is included.
+game_engine_build_packages:
+  - build-essential
+  - cmake
+  - ninja-build
+  - nasm
+  - wget
+  - libsdl2-dev
+  - libsdl2-net-dev
+  - libsdl2-image-dev
+  - libsdl2-mixer-dev
+  - libopenal-dev
+  - libcurl4-openssl-dev
+  - libjpeg-dev
+  - libpng-dev
+  - libvorbis-dev
+  - libmad0-dev
+  - libmpg123-dev
+  - libbz2-dev
+  - libgmp-dev
+  - libspatialindex-dev
+  - libluajit-5.1-dev
+  - libsqlite3-dev
+  - libgtk2.0-dev
+  - libgtk-3-dev
+  - libfluidsynth-dev
+  - libportmidi-dev
+  - libsndfile1-dev
+  - libvpx-dev
+  - libvulkan-dev
+  - libvulkan1
+  - flac
+  - libflac-dev
+  - freepats
+  - openssl
+  - miniupnpc
+  - libao-dev
+  - vainfo
+  - vdpauinfo
+  - libzip-dev
+  - zipcmp
+  - zipmerge
+  - ziptool
+
+# ---------------------------------------------------------------------------
 # Python (pip) tooling used by the custom scripts that live in this
 # workstation's home dir (ansible-proxmox-ssh-gui-tool, OptiPing, the
 # starhaven node exporter, crafty tweaks). Debian 13 is PEP 668
@@ -581,6 +668,25 @@ remote_access_packages:
 vnc_display: "1"
 vnc_geometry: "1920x1080"
 vnc_depth: 16
+
+# VNC-restart confirmation dialog (setup-remote-access.yml's safety gate) —
+# only installed/used when a MATE session is actually found running for
+# vm_enduser_name at play time. See the "Ask the logged-in user before
+# restarting VNC" task for why this replaced a plain CLI `pause`: a pause
+# prompt only works when the playbook is run from an attached terminal, and
+# silently can't block anything when driven non-interactively (found
+# 2026-09-21 — a non-interactive run restarted VNC and dropped a live
+# session because the old TCP-ESTABLISHED check missed it).
+vnc_restart_prompt_packages:
+  - zenity           # general-purpose GUI dialog tool for future ad-hoc scripts (not used by
+                      # the restart prompt itself — that uses yad below, which supports the
+                      # gradient theming/timeout this dialog needed and zenity's build doesn't)
+  - libnotify-bin    # notify-send — the heads-up toast fired just before the dialog maps
+  - yad               # the actual confirmation dialog — richer theming/timeout support than zenity
+  - wmctrl            # sets _NET_WM_STATE_DEMANDS_ATTENTION so the taskbar entry flags the dialog
+  - xdotool            # locates/centers/raises the dialog window on the user's real screen
+  - x11-xkb-utils        # xkbbell — rings the X bell, which marco's visual-bell turns into a screen flash
+vnc_restart_prompt_timeout: 45
 
 # ---------------------------------------------------------------------------
 # Dev applets (setup-dev-applets.yml) — ported from the user's kubuntu-setup
