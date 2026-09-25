@@ -721,28 +721,54 @@
       - Reload MateMenu applet
     tags: [mate, panel, favorites]
 
-  # Region-select screenshot, Windows-Snip-style (Win+Shift+S). flameshot
-  # is a single minimal Qt package (no screenshot-suite/plugin sprawl like
-  # shutter) that opens straight into its region-select overlay with
-  # `flameshot gui` — no extra flags/config needed to match the Windows
-  # muscle-memory shortcut.
+  # Superseded by mate-screenshot (below) — flameshot's persistent
+  # background daemon/tray icon was the whole reason for the switch, so
+  # leaving the package installed alongside would just be confusing dead
+  # weight, not a config anyone still wants.
+  - name: Purge flameshot (superseded by mate-screenshot, no daemon/tray icon)
+    ansible.builtin.apt:
+      name: flameshot
+      state: absent
+      purge: true
+    tags: [mate, panel, screenshot]
+
+  - name: Remove leftover per-user flameshot config (package no longer installed)
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/flameshot"
+      state: absent
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, panel, screenshot]
+
+  # Region-select screenshot, Windows-Snip-style (Win+Shift+S).
+  #
+  # REPLACED flameshot with mate-screenshot 2026-09-25: flameshot always
+  # spawns a persistent background daemon on its first `flameshot gui`
+  # call (that's flameshot's own architecture, not a config mistake — see
+  # the removed disabledTrayIcon history below), and the user explicitly
+  # didn't want that daemon/tray-icon process lingering after every
+  # capture. mate-screenshot --area is MATE's own stock, already-in-the-
+  # base-desktop screenshot tool: it opens the same crosshair region
+  # selector, then exits completely the instant the capture is done — no
+  # daemon, no tray icon, nothing left running. --clipboard sends the
+  # capture straight to the clipboard (confirmed supported together via
+  # `strings mate-screenshot`), matching Win+Shift+S's paste-immediately
+  # behavior instead of popping a "save as" dialog.
   #
   # Slot 2 (org/mate/marco/keybinding-commands/command-2 +
   # org/mate/marco/global-keybindings/run-command-2) is MATE's own stock
   # "area screenshot" slot — confirmed live via `gsettings get` before this
-  # task existed: command-2 already defaulted to mate-screenshot's own
-  # --area invocation on Shift+Print. Reusing that slot (instead of an
-  # unused one) keeps the *semantic* binding — "take a region screenshot" —
-  # in the one place MATE already reserves for it, just pointed at
-  # flameshot and rebound to the Windows-familiar chord instead of
-  # Shift+Print. Slots 1 (Mod4+L lock) and 3 (Mod4+E caja) are MATE's other
-  # stock defaults and are left untouched.
-  - name: Bind Win+Shift+S to flameshot's region-select screenshot (like Windows' Snip tool)
+  # task existed: command-2 already defaulted to this exact
+  # mate-screenshot --area invocation, just on Shift+Print instead of
+  # Win+Shift+S. Reusing that slot keeps the *semantic* binding — "take a
+  # region screenshot" — in the one place MATE already reserves for it.
+  # Slots 1 (Mod4+L lock) and 3 (Mod4+E caja) are MATE's other stock
+  # defaults and are left untouched.
+  - name: Bind Win+Shift+S to mate-screenshot's region-select (like Windows' Snip tool)
     ansible.builtin.copy:
       dest: /etc/dconf/db/local.d/09-screenshot-keybinding
       content: |
         [org/mate/marco/keybinding-commands]
-        command-2='flameshot gui'
+        command-2='mate-screenshot --area --clipboard'
 
         [org/mate/marco/global-keybindings]
         run-command-2='<Super><Shift>s'
@@ -752,36 +778,29 @@
     notify: Update dconf databases
     tags: [mate, panel, screenshot]
 
-  # flameshot's own default (confirmed via `flameshot config --help`):
-  # "Per default runs Flameshot in the background and adds a tray icon for
-  # configuration" — the first `flameshot gui` call spawns that background
-  # daemon (so later captures are instant) and it shows a persistent tray
-  # icon unless told not to. disabledTrayIcon=true is flameshot's own
-  # config key for that (confirmed live via `flameshot config --trayicon
-  # false`, which writes exactly this). force:false, same pattern as the
-  # MateMenu favorites seed — seeds the default once, never fights a user
-  # who re-enables the tray icon themselves later.
-  - name: Ensure end-user's ~/.config/flameshot directory exists
-    ansible.builtin.file:
-      path: "/home/{{ vm_enduser_name }}/.config/flameshot"
-      state: directory
-      owner: "{{ vm_enduser_name }}"
-      group: "{{ vm_enduser_name }}"
-      mode: "0755"
-    when: vm_enduser_name | default('') | length > 0
-    tags: [mate, panel, screenshot]
-
-  - name: Disable flameshot's tray icon (screenshot-only, no lingering icon)
+  # mate-screenshot's own shipped .desktop defaults to `--interactive`
+  # (a picker dialog: full-screen/window/area, then a save-as prompt) —
+  # not the direct one-click region-select the Win+Shift+S binding above
+  # gives. This custom launcher exists purely so the Start Menu icon does
+  # exactly what the shortcut does, matching behavior instead of offering
+  # a different, slower flow. Icon reused from mate-screenshot's own
+  # shipped .desktop (applets-screenshooter, confirmed present in the
+  # mate-utils package) rather than inventing a new one.
+  - name: Deploy a Screenshot menu launcher that runs mate-screenshot's region-select directly
     ansible.builtin.copy:
-      dest: "/home/{{ vm_enduser_name }}/.config/flameshot/flameshot.ini"
+      dest: /usr/share/applications/stationctl-screenshot.desktop
       content: |
-        [General]
-        disabledTrayIcon=true
-      owner: "{{ vm_enduser_name }}"
-      group: "{{ vm_enduser_name }}"
+        [Desktop Entry]
+        Type=Application
+        Name=Screenshot
+        Comment=Take a region screenshot (same as Win+Shift+S)
+        Exec=mate-screenshot --area --clipboard
+        Icon=applets-screenshooter
+        Terminal=false
+        Categories=Utility;Graphics;
+      owner: root
+      group: root
       mode: "0644"
-      force: false
-    when: vm_enduser_name | default('') | length > 0
     tags: [mate, panel, screenshot]
 
   - name: Lock panel layout and theme keys so they survive login resets
@@ -803,28 +822,50 @@
     ansible.builtin.command: dconf update
     changed_when: true
 
-  # MateMenu's favorites plugin (mate_menu/plugins/applications.py) reads
-  # ~/.config/mate-menu/applications.list exactly once, in its own
-  # buildFavorites() at plugin __init__ — it never re-reads the file on
-  # later menu opens, and doesn't watch it for changes. So a seeded/updated
-  # favorites file (or the start-with-favorites dconf key, which the same
-  # plugin instance also only picks up at __init__) needs the applet
-  # process itself restarted to actually show up — confirmed live
-  # 2026-09-25: the file was fixed on disk but the already-running process
-  # kept showing stale data until killed.
+  # A prior version of this handler used `pkill -x mate-menu` to force a
+  # fresh process — REMOVED 2026-09-25 because mate-panel treats any
+  # unexpected drop of a live embedded applet's D-Bus connection as a
+  # crash (confirmed via `strings mate-panel`: it ships its own "%s" has
+  # quit unexpectedly" / _Reload / _Don't Reload / D_elete dialog for
+  # exactly this), even when we immediately relaunch a clean replacement
+  # ourselves — there's no way to kill the process without mate-panel
+  # seeing it as a crash.
   #
-  # mate-menu.py is D-Bus-activated (org.mate.panel.applet.MateMenuAppletFactory,
-  # Exec=/usr/lib/mate-menu/mate-menu.py — see /usr/share/dbus-1/services/),
-  # not a directly-managed child of mate-panel, so killing it is safe and
-  # sufficient: dbus-daemon respawns it the moment the user next clicks the
-  # menu, which re-reads applications.list and the dconf key fresh. No
-  # login-session dependency to check first (unlike the wallpaper dconf
-  # reset elsewhere in this play) — if no session is running, pkill just
-  # finds nothing to kill and exits 1, which is a no-op here, not an error.
+  # This version never touches the process at all. Instead it removes
+  # 'mate-menu' from org/mate/panel/general/object-id-list (the panel's
+  # own live list of panel objects) and then `dconf reset`s that key back
+  # to the system default — the exact same reconfiguration path the
+  # panel's own "Remove from Panel" / "Add to Panel" UI uses, so mate-panel
+  # is the one intentionally tearing the object down, not discovering a
+  # surprise death. Confirmed live 2026-09-25: the underlying mate-menu.py
+  # process exits on its own (rc 0, not a crash) once its last panel
+  # object is gone, and a brand new one gets D-Bus-activated once the key
+  # resets — no dialog, no explicit kill anywhere in this task.
+  #
+  # `dconf reset` (not writing the original value back) matters here: it
+  # means this handler can never freeze a stale copy of object-id-list in
+  # the user db — it always falls back to whatever the system db's
+  # current value is (i.e. whatever panel-layout.ini.j2 currently
+  # renders), so a future change to that template can't get silently
+  # shadowed by a value this task wrote once and forgot about.
   - name: Reload MateMenu applet
-    ansible.builtin.command: "pkill -u {{ vm_enduser_name }} -f /usr/lib/mate-menu/mate-menu.py"
+    ansible.builtin.shell: |
+      set -e
+      uid=$(id -u "{{ vm_enduser_name }}")
+      [ -S "/run/user/$uid/bus" ] || exit 0
+      export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus"
+      current=$(dconf read /org/mate/panel/general/object-id-list)
+      case "$current" in *"'mate-menu'"*) ;; *) exit 0 ;; esac
+      without=$(CURRENT="$current" python3 -c "
+      import ast, os
+      print([x for x in ast.literal_eval(os.environ['CURRENT']) if x != 'mate-menu'])
+      ")
+      dconf write /org/mate/panel/general/object-id-list "$without"
+      sleep 0.5
+      dconf reset /org/mate/panel/general/object-id-list
+    args:
+      executable: /bin/bash
     become: true
-    register: _mate_menu_reload
-    changed_when: _mate_menu_reload.rc == 0
-    failed_when: _mate_menu_reload.rc not in [0, 1]
+    become_user: "{{ vm_enduser_name }}"
+    changed_when: true
     when: vm_enduser_name | default('') | length > 0
