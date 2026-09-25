@@ -217,6 +217,14 @@ mate_packages:
   - mate-menu           # replaces the stock menu-bar applet — categorized/searchable app
                          # browser (Linux Mint's MATE menu, ported upstream), favorites +
                          # easy-uninstall; stock menu-bar has no search at all
+  - flameshot           # region-select screenshot tool (Win+Shift+S-style), see the
+                         # keybinding-commands/mate-menu-favorites tasks in
+                         # setup-mate-desktop.yml
+  - vlc                 # media player
+  - gpicview             # minimal image viewer (ristretto-equivalent) — chosen over
+                         # ristretto itself, which pulls in libxfce4ui/libxfconf
+                         # (the Xfce lib chain this repo otherwise avoids); gpicview
+                         # has no desktop-toolkit deps beyond GTK3
 
 mate_gtk_theme: "Arc-Dark"
 mate_marco_theme: "Arc-Dark"
@@ -236,6 +244,7 @@ mate_menu_favorites:
   - /usr/share/applications/org.keepassxc.KeePassXC.desktop
   - /usr/share/applications/org.xfce.mousepad.desktop
   - /usr/share/applications/code.desktop
+  - /usr/share/applications/org.flameshot.Flameshot.desktop
 
 # System-wide monospace font — a Nerd Font *Mono* variant so terminal apps
 # get code + icon glyphs (Powerline, devicons, etc.) from a single font

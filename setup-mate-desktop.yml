@@ -681,18 +681,108 @@
   # itself whenever a user right-clicks "Add/Remove from Favorites", so
   # force:false only seeds the default shortlist on first login and never
   # clobbers what a user has since customized on a later playbook re-run.
+  #
+  # Templated from templates/mate-menu-favorites.list.j2 rather than an
+  # inline `content: | ... join('\n')` — that inline form (tried first)
+  # rendered the join separator as a literal backslash-n instead of a real
+  # newline when run through ansible.builtin.copy's content templating
+  # (confirmed live 2026-09-25: reproduced against a bare localhost
+  # playbook too, so it's a templating-path quirk of copy's `content:`
+  # arg, not host-specific). The template module's {% for %} loop sidesteps
+  # the whole escape-sequence class of bug by never needing '\n' as a
+  # quoted Jinja string in the first place.
   - name: Seed the MateMenu favorites shortlist (best-effort default)
-    ansible.builtin.copy:
+    ansible.builtin.template:
+      src: templates/mate-menu-favorites.list.j2
       dest: "/home/{{ vm_enduser_name }}/.config/mate-menu/applications.list"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+      force: false
+    notify: Reload MateMenu applet
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, panel, favorites]
+
+  # start-with-favorites is a real GSettings key on org.mate.mate-menu
+  # (confirmed via `gsettings describe`, default false) — it controls which
+  # of the menu's two tabs (Favorites vs. All Applications) is shown first
+  # when the menu opens, not just an ordering hint.
+  - name: Default MateMenu to open on its Favorites tab (fixes "favorites tab isn't the default")
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/08-mate-menu-favorites-tab
       content: |
-        separator
-        {{ mate_menu_favorites | map('regex_replace', '^', 'location:') | join('\n') }}
+        [org/mate/mate-menu]
+        start-with-favorites=true
+      owner: root
+      group: root
+      mode: "0644"
+    notify:
+      - Update dconf databases
+      - Reload MateMenu applet
+    tags: [mate, panel, favorites]
+
+  # Region-select screenshot, Windows-Snip-style (Win+Shift+S). flameshot
+  # is a single minimal Qt package (no screenshot-suite/plugin sprawl like
+  # shutter) that opens straight into its region-select overlay with
+  # `flameshot gui` — no extra flags/config needed to match the Windows
+  # muscle-memory shortcut.
+  #
+  # Slot 2 (org/mate/marco/keybinding-commands/command-2 +
+  # org/mate/marco/global-keybindings/run-command-2) is MATE's own stock
+  # "area screenshot" slot — confirmed live via `gsettings get` before this
+  # task existed: command-2 already defaulted to mate-screenshot's own
+  # --area invocation on Shift+Print. Reusing that slot (instead of an
+  # unused one) keeps the *semantic* binding — "take a region screenshot" —
+  # in the one place MATE already reserves for it, just pointed at
+  # flameshot and rebound to the Windows-familiar chord instead of
+  # Shift+Print. Slots 1 (Mod4+L lock) and 3 (Mod4+E caja) are MATE's other
+  # stock defaults and are left untouched.
+  - name: Bind Win+Shift+S to flameshot's region-select screenshot (like Windows' Snip tool)
+    ansible.builtin.copy:
+      dest: /etc/dconf/db/local.d/09-screenshot-keybinding
+      content: |
+        [org/mate/marco/keybinding-commands]
+        command-2='flameshot gui'
+
+        [org/mate/marco/global-keybindings]
+        run-command-2='<Super><Shift>s'
+      owner: root
+      group: root
+      mode: "0644"
+    notify: Update dconf databases
+    tags: [mate, panel, screenshot]
+
+  # flameshot's own default (confirmed via `flameshot config --help`):
+  # "Per default runs Flameshot in the background and adds a tray icon for
+  # configuration" — the first `flameshot gui` call spawns that background
+  # daemon (so later captures are instant) and it shows a persistent tray
+  # icon unless told not to. disabledTrayIcon=true is flameshot's own
+  # config key for that (confirmed live via `flameshot config --trayicon
+  # false`, which writes exactly this). force:false, same pattern as the
+  # MateMenu favorites seed — seeds the default once, never fights a user
+  # who re-enables the tray icon themselves later.
+  - name: Ensure end-user's ~/.config/flameshot directory exists
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.config/flameshot"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [mate, panel, screenshot]
+
+  - name: Disable flameshot's tray icon (screenshot-only, no lingering icon)
+    ansible.builtin.copy:
+      dest: "/home/{{ vm_enduser_name }}/.config/flameshot/flameshot.ini"
+      content: |
+        [General]
+        disabledTrayIcon=true
       owner: "{{ vm_enduser_name }}"
       group: "{{ vm_enduser_name }}"
       mode: "0644"
       force: false
     when: vm_enduser_name | default('') | length > 0
-    tags: [mate, panel, favorites]
+    tags: [mate, panel, screenshot]
 
   - name: Lock panel layout and theme keys so they survive login resets
     ansible.builtin.copy:
@@ -712,3 +802,29 @@
   - name: Update dconf databases
     ansible.builtin.command: dconf update
     changed_when: true
+
+  # MateMenu's favorites plugin (mate_menu/plugins/applications.py) reads
+  # ~/.config/mate-menu/applications.list exactly once, in its own
+  # buildFavorites() at plugin __init__ — it never re-reads the file on
+  # later menu opens, and doesn't watch it for changes. So a seeded/updated
+  # favorites file (or the start-with-favorites dconf key, which the same
+  # plugin instance also only picks up at __init__) needs the applet
+  # process itself restarted to actually show up — confirmed live
+  # 2026-09-25: the file was fixed on disk but the already-running process
+  # kept showing stale data until killed.
+  #
+  # mate-menu.py is D-Bus-activated (org.mate.panel.applet.MateMenuAppletFactory,
+  # Exec=/usr/lib/mate-menu/mate-menu.py — see /usr/share/dbus-1/services/),
+  # not a directly-managed child of mate-panel, so killing it is safe and
+  # sufficient: dbus-daemon respawns it the moment the user next clicks the
+  # menu, which re-reads applications.list and the dconf key fresh. No
+  # login-session dependency to check first (unlike the wallpaper dconf
+  # reset elsewhere in this play) — if no session is running, pkill just
+  # finds nothing to kill and exits 1, which is a no-op here, not an error.
+  - name: Reload MateMenu applet
+    ansible.builtin.command: "pkill -u {{ vm_enduser_name }} -f /usr/lib/mate-menu/mate-menu.py"
+    become: true
+    register: _mate_menu_reload
+    changed_when: _mate_menu_reload.rc == 0
+    failed_when: _mate_menu_reload.rc not in [0, 1]
+    when: vm_enduser_name | default('') | length > 0
