@@ -313,6 +313,7 @@ dev_packages:
   - gh
   - ansible
   - mousepad
+  - openjdk-21-jdk  # JDK 21 (Debian 13 default) — includes the javac compiler and the java runtime
   - python3-tk    # tkinter backend — required by customtkinter GUI tools (must be apt, not pip)
   - idle          # provides idlelib, used by some homegrown editor scripts
   - keepassxc
@@ -345,6 +346,53 @@ dev_packages:
   - libegl1-mesa-dev
   - libgles2-mesa-dev
   - libgtk-4-dev
+  # C/C++ toolchain extras (gcc/g++/make come from build-essential, clang/lldb/
+  # gdb/valgrind/meson/ninja from sysadmin_cli_packages)
+  - clangd
+  - clang-format
+  - clang-tidy
+  - cppcheck
+  - ccache
+  - bear             # generates compile_commands.json for clangd from make builds
+  - mold             # fast linker
+  - cmake-curses-gui
+  - autoconf
+  - automake
+  - libtool
+  - bison
+  - flex
+  - gdbserver
+  - heaptrack
+  - linux-perf
+  - lcov
+  - gcovr
+  - doxygen
+  - graphviz
+  - universal-ctags
+  - cscope
+  - libssl-dev
+  - libcurl4-openssl-dev
+  - libsqlite3-dev
+  - zlib1g-dev
+  - libffi-dev
+  - libboost-all-dev
+  # Java build tooling (the JDK itself is openjdk-21-jdk above)
+  - maven
+  - gradle
+  - ant
+  # C# beyond dotnet-sdk-9.0 (Roslyn csc): Mono's mcs compiler + runtime
+  - mono-mcs
+  - mono-devel
+  # Bash
+  - shfmt
+  - bats
+  - bash-completion
+  - libsystemd-dev   # fleetwm meson dependency('libsystemd')
+  - libxcb1-dev      # fleetwm meson dependency('xcb')
+  - libgtest-dev     # fleetwm meson dependency('gtest') — unit tests
+  - lm-sensors       # backs the PySensors module tuxthrottle imports
+  - qrencode           # CLI QR codes (2FA enrolment)
+  - python3-qrcodegen  # QR generator module (apt-only; pip's `qrcode` below covers python3-qrcode)
   - libpipewire-0.3-dev
   - libgtk4-layer-shell-dev
   - libpam0g-dev
@@ -650,6 +698,33 @@ workstation_pip_packages:
   - qrcode
   - prometheus_client
   - peewee
+  # Found by scanning the imports/manifests of the active BeanGreen247 repos
+  # (2026-10-02): tuxthrottle, osu-lazer-tools, Starhaven node exporter.
+  - psutil
+  - pytest
+  - ruff
+  - textual
+  - PySensors       # `import sensors` in tuxthrottle
+  - ttkbootstrap
+  - vdf
+  - rosu-pp-py
+  # General Python dev tooling
+  - black
+  - flake8
+  - mypy
+  - pylint
+  - isort
+  - tox
+  - build
+  - twine
+  - ipython
+  # Ansible side: yamllint backs ansible-lint/CI; the rest are the libs
+  # Ansible's json_query / ipaddr / password_hash filters need
+  - yamllint
+  - jmespath
+  - netaddr
+  - passlib
+  - molecule        # role/playbook test framework; resolves to the already-installed ansible-core
   # Used by the redhat.ansible VS Code extension's built-in lint integration
   # against this repo's own playbooks. Found broken on remote-workstation
   # 2026-09-18 (manually installed, missing wcmatch/jsonschema/black/etc. —
@@ -703,9 +778,9 @@ dotfile_sync_files:
   - name: vimrc
     url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/vim/vimrc
     dest: "~/.vimrc"
-  - name: claude-md
-    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/claude/CLAUDE.md
-    dest: "~/.claude/CLAUDE.md"
   - name: vim-midnight-colorscheme
     url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/vim/colors/midnight.vim
     dest: "~/.vim/colors/midnight.vim"
+  - name: claude-md
+    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/claude/CLAUDE.md
+    dest: "~/.claude/CLAUDE.md"

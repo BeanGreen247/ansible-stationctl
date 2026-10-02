@@ -1,0 +1,28 @@
+---
+# Makes the system-wide pip site-packages readable by normal users. Imported
+# as both a pre_task and a post_task of setup-dev-tools.yml: pip runs as root
+# under a restrictive umask and can leave packages (ansible included, on a
+# host that is also its own controller) unreadable, which breaks every later
+# ansible/yamllint/python run. Matches any python3.x, so it survives
+# interpreter upgrades.
+- name: Look for unreadable files in the system pip site-packages
+  ansible.builtin.shell: |
+    set -o pipefail
+    for d in /usr/local/lib/python3*/dist-packages; do
+      [ -d "$d" ] && find "$d" ! -type l ! -perm -o=r -print -quit
+    done
+  args:
+    executable: /bin/bash
+  register: _pip_unreadable
+  changed_when: false
+
+- name: Make the system pip site-packages world-readable
+  ansible.builtin.shell: |
+    for d in /usr/local/lib/python3*/dist-packages; do
+      [ -d "$d" ] && chmod -R o+rX "$d"
+    done
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when: _pip_unreadable.stdout | length > 0
