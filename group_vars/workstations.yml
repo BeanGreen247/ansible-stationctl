@@ -706,3 +706,6 @@ dotfile_sync_files:
   - name: claude-md
     url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/claude/CLAUDE.md
     dest: "~/.claude/CLAUDE.md"
+  - name: vim-midnight-colorscheme
+    url: https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/vim/colors/midnight.vim
+    dest: "~/.vim/colors/midnight.vim"

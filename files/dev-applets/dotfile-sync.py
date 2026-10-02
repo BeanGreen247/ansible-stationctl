@@ -67,6 +67,10 @@ dest = ~/.bashrc
 url  = https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/vim/vimrc
 dest = ~/.vimrc
 
+[file.vim-midnight-colorscheme]
+url  = https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/vim/colors/midnight.vim
+dest = ~/.vim/colors/midnight.vim
+
 [file.claude-md]
 url  = https://raw.githubusercontent.com/BeanGreen247/dotfiles/master/claude/CLAUDE.md
 dest = ~/.claude/CLAUDE.md
@@ -134,7 +138,15 @@ def _fetch(url: str, token: str = "") -> bytes:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+        data = resp.read()
+        expected = resp.headers.get("Content-Length")
+        if expected and expected.isdigit() and len(data) != int(expected):
+            raise ValueError(f"truncated download ({len(data)} of {expected} bytes)")
+        if not data.strip():
+            raise ValueError("empty response")
+        if data.lstrip()[:15].lower().startswith((b"<!doctype html", b"<html")):
+            raise ValueError("got an HTML page instead of the file")
+        return data
 
 
 def _sha256(data: bytes) -> str:
@@ -172,7 +184,9 @@ def sync_one(entry: dict, backup_count: int, force: bool = False) -> bool:
         info(f"  backed up → {backup.name}")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+    tmp = dest.with_name(dest.name + ".dotfile-sync.tmp")
+    tmp.write_bytes(data)
+    tmp.replace(dest)
     if entry.get("chmod"):
         import stat as _stat
         mode = int(entry["chmod"], 8)

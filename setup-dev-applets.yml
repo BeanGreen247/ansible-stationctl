@@ -249,7 +249,6 @@
       owner: "{{ vm_enduser_name }}"
       group: "{{ vm_enduser_name }}"
       mode: "0600"
-      force: false
     when: vm_enduser_name | default('') | length > 0
     tags: [applets, dotfile-sync]
 
@@ -308,7 +307,8 @@
   # VNC/console session ends and never fires again.
   - name: Enable lingering for the end-user (keeps systemd --user alive)
     ansible.builtin.command: loginctl enable-linger {{ vm_enduser_name }}
-    changed_when: true
+    args:
+      creates: "/var/lib/systemd/linger/{{ vm_enduser_name }}"
     when: vm_enduser_name | default('') | length > 0
     tags: [applets, dotfile-sync]
 
