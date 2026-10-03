@@ -408,7 +408,6 @@ dev_packages:
   - libcairo2-dev
   - libglib2.0-dev
   - libepoxy-dev
-  - libcurl4-openssl-dev
   - openssh-client
 
 # ---------------------------------------------------------------------------
