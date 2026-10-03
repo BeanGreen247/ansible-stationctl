@@ -401,6 +401,15 @@ dev_packages:
   # to render its graph in a native window instead of a browser tab).
   - gir1.2-webkit2-4.1
   - libwebkit2gtk-4.1-0
+  # Native GTK4 app build deps beyond libgtk-4-dev above: text/graphics/glib
+  # headers, libcurl for FTP/FTPS/SFTP transfers, and the OpenSSH client suite
+  # (ssh, sftp, scp) that native tools shell out to.
+  - libpango1.0-dev
+  - libcairo2-dev
+  - libglib2.0-dev
+  - libepoxy-dev
+  - libcurl4-openssl-dev
+  - openssh-client
 
 # ---------------------------------------------------------------------------
 # Armbian Build Framework host deps (LukyStuff/Debian-build-server/build,
