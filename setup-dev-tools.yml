@@ -16,6 +16,11 @@
   become: true
   gather_facts: true
 
+  pre_tasks:
+  - name: Ensure pip-installed packages are readable before the run
+    ansible.builtin.import_tasks: tasks/pip-readable.yml
+    tags: [always]
+
   tasks:
 
   # Debian 13's own `nodejs` package is v20 — too old for
@@ -512,11 +517,31 @@
   # ownership once (one-off pip install of just that package) or excluding
   # it from the apt-owned set some other way — not attempted here; see
   # docs/TODO.md.
-  - name: Install pip tooling for the custom scripts in this workstation's home dir
-    ansible.builtin.pip:
-      name: "{{ workstation_pip_packages }}"
-      extra_args: --break-system-packages --ignore-installed
-    when: workstation_pip_packages | default([]) | length > 0
+  # The pip task rewrites ansible's own files when the controller is also the
+  # target, so the permission repair must run even if it dies partway. `raw`
+  # needs no working Python/ansible on the target, unlike the other modules.
+  - name: Install pip tooling, then always restore readable permissions
+    block:
+    - name: Install pip tooling for the custom scripts in this workstation's home dir
+      ansible.builtin.pip:
+        name: "{{ workstation_pip_packages }}"
+        extra_args: --break-system-packages --ignore-installed
+        # --ignore-installed reinstalls everything each run; under the hosts'
+        # restrictive root umask the files landed unreadable by normal users
+        # and, on a host that is also the ansible controller, broke ansible
+        # itself mid-run (2026-10-02). The `always` step below is the backstop.
+        umask: "0022"
+      when: workstation_pip_packages | default([]) | length > 0
+      tags: [dev, pip]
+    always:
+    - name: Ensure pip-installed packages are readable after the run
+      ansible.builtin.raw: |
+        for d in /usr/local/lib/python3*/dist-packages; do
+          [ -d "$d" ] && chmod -R o+rX "$d"
+        done
+        exit 0
+      changed_when: false
+      tags: [dev, pip]
     tags: [dev, pip]
 
   - name: Add end-user to docker group
