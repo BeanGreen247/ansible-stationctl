@@ -658,6 +658,8 @@ game_engine_build_packages:
   - wget
   - libsdl2-dev
   - libsdl2-2.0-0  # runtime, explicit so prebuilt SDL2 apps (Lestrix) run
+  - libfreetype6  # runtime for Lestrix
+  - libfontconfig1  # runtime for Lestrix
   - libfreetype-dev  # Lestrix GUI build
   - libfontconfig-dev  # Lestrix GUI build
   - libglib2.0-dev  # Lestrix build (glib-2.0, gio-2.0)
