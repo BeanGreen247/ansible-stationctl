@@ -364,6 +364,17 @@ dev_packages:
   - gdbserver
   - heaptrack
   - linux-perf
+  - perf-tools-unstable   # Brendan Gregg's perf/ftrace scripts (iosnoop, funccount, ...) on top of linux-perf
+  - autofdo               # create_gcov: perf (LBR) samples -> GCC AutoFDO profile
+  - bolt-19               # llvm-bolt / perf2bolt post-link optimizer
+  # Lestrix build, tests and installer (SDL2 and Mesa dev files come from the list above)
+  - libfreetype-dev
+  - libfontconfig-dev
+  - xvfb                  # Lestrix window tests without a display
+  - python3-pyte          # Lestrix terminal-core differential test
+  - qemu-user             # Lestrix ARM tests (test.sh --arm)
+  - desktop-file-utils    # desktop-file-validate for the Lestrix menu entries
+  - whiptail              # fallback for the Lestrix dialog installer
   - lcov
   - gcovr
   - doxygen
