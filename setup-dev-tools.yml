@@ -58,6 +58,62 @@
       state: latest
     tags: [dev, nodejs]
 
+  # Configure npm to install global packages into the user's home directory
+  # (~/.npm-global) instead of /usr/local or /usr, avoiding EACCES errors when
+  # running `npm install -g <package>` without sudo (npm standard recommendation).
+  - name: Ensure ~/.npm-global directories exist for end-user
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    loop:
+      - "/home/{{ vm_enduser_name }}/.npm-global"
+      - "/home/{{ vm_enduser_name }}/.npm-global/bin"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, nodejs, npm]
+
+  - name: Configure npm global prefix in ~/.npmrc for end-user
+    ansible.builtin.lineinfile:
+      path: "/home/{{ vm_enduser_name }}/.npmrc"
+      regexp: '^prefix\s*='
+      line: "prefix=/home/{{ vm_enduser_name }}/.npm-global"
+      create: true
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0600"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, nodejs, npm]
+
+  - name: Ensure ~/.npm-global/bin is in end-user's ~/.profile
+    ansible.builtin.lineinfile:
+      path: "/home/{{ vm_enduser_name }}/.profile"
+      regexp: '.*\.npm-global/bin.*'
+      line: 'export PATH=~/.npm-global/bin:$PATH'
+      create: true
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, nodejs, npm]
+
+  - name: Install global npm packages for end-user
+    community.general.npm:
+      name: "{{ item }}"
+      global: true
+      state: present
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    environment:
+      HOME: "/home/{{ vm_enduser_name }}"
+      PATH: "/home/{{ vm_enduser_name }}/.npm-global/bin:{{ ansible_env.PATH }}"
+    loop: "{{ workstation_npm_packages | default([]) }}"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - (workstation_npm_packages | default([]) | length) > 0
+    tags: [dev, nodejs, npm, packages]
+
   # Debian's repos don't carry the .NET SDK — Microsoft's own apt repo does.
   # Needed to build .NET projects (e.g. jellyfin-storage-manager, net9.0)
   # locally. Using Microsoft's own packages-microsoft-prod.deb (their
@@ -521,6 +577,7 @@
   # target, so the permission repair must run even if it dies partway. `raw`
   # needs no working Python/ansible on the target, unlike the other modules.
   - name: Install pip tooling, then always restore readable permissions
+    tags: [dev, pip]
     block:
     - name: Install pip tooling for the custom scripts in this workstation's home dir
       ansible.builtin.pip:
@@ -542,7 +599,6 @@
         exit 0
       changed_when: false
       tags: [dev, pip]
-    tags: [dev, pip]
 
   - name: Add end-user to docker group
     ansible.builtin.user:
