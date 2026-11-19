@@ -153,7 +153,7 @@ Same procedure for `remote-workstation` (Proxmox VM) and `local-workstation` (ba
 | `setup-ansibleuser.yml` | Bootstrap `ansibleuser` with sudo + SSH key | — |
 | `setup-base-debian.yml` | APT update/upgrade, base packages, SSH key-only, end-user account | `base` |
 | `setup-mate-desktop.yml` | Minimal MATE, single bottom panel, dark theme, compositing off | `mate` |
-| `setup-dev-tools.yml` | git, build-essential, Docker, Python, Node.js, GitHub CLI | `dev` |
+| `setup-dev-tools.yml` | git, build-essential, Docker, Python, Node.js, GitHub CLI, Swift/xtool (`--tags swift`, see playbook header) | `dev` |
 | `setup-remote-access.yml` | TigerVNC (MATE session) + Tailscale | `remote-access` |
 | `setup-performance-tuning.yml` | zram, swappiness, disables unneeded services | `perf` |
 | `setup-kernel-perf-tuning.yml` | CPU governor, GRUB cmdline flags (reboot required), extra vm/kernel/net sysctls, BBR, IO scheduler, irqbalance/preload, earlyoom | `kperf` |

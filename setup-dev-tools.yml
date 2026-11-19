@@ -9,6 +9,17 @@
 # Target hosts
 #   ansible-playbook setup-dev-tools.yml --limit workstations
 #
+# Swift / iOS-from-Linux toolchain (swiftly + xtool + Darwin SDK), tag "swift"
+#   Set up (or re-verify) one host; safe to re-run, a second pass is changed=0:
+#     ansible-playbook setup-dev-tools.yml --limit <host> --tags swift
+#   Manual steps the playbook cannot do:
+#     1. Before the run: download Xcode_<ver>.xip in a browser signed in with
+#        an Apple ID (https://developer.apple.com/download/all/?q=Xcode) into
+#        ~/Downloads of the end user. Without it the Darwin SDK step is skipped.
+#     2. After the run, on the host, once: `xtool setup` (Apple ID login + 2FA
+#        for signing). Then open a new terminal so swiftly's PATH is loaded.
+#   Verify on the host: apple-toolchain.sh check (apple-dev-on-linux skill).
+#
 # Credit: Thomas Mozdren
 ---
 - name: Install development tools
@@ -652,6 +663,139 @@
       - git_user_name | default('') | length > 0
       - git_user_email | default('') | length > 0
     tags: [dev, git]
+
+  # Swift + iOS-from-Linux toolchain (swiftly + xtool), per-user under the
+  # end user's home. Reproduces the manual steps from swift.org/install/linux
+  # and the apple-dev-on-linux skill's apple-toolchain.sh. Apt deps first:
+  # swiftly's toolchains need these at link time, usbmuxd/libimobiledevice
+  # are for installing to a USB iPhone.
+  - name: Install Swift toolchain and usbmuxd apt dependencies
+    ansible.builtin.apt:
+      name: "{{ swift_apt_packages }}"
+      state: present
+    tags: [dev, swift, xtool]
+
+  - name: Check whether swiftly is already initialised for end-user
+    ansible.builtin.stat:
+      path: "/home/{{ vm_enduser_name }}/.local/share/swiftly/bin/swiftly"
+    register: _swiftly_bin
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, swift, xtool]
+
+  - name: Download swiftly tarball
+    ansible.builtin.get_url:
+      url: "https://download.swift.org/swiftly/linux/swiftly-{{ ansible_architecture }}.tar.gz"
+      dest: "/tmp/swiftly-{{ ansible_architecture }}.tar.gz"
+      mode: "0644"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - not _swiftly_bin.stat.exists
+    tags: [dev, swift, xtool]
+
+  - name: Unpack swiftly installer
+    ansible.builtin.unarchive:
+      src: "/tmp/swiftly-{{ ansible_architecture }}.tar.gz"
+      dest: /tmp
+      remote_src: true
+      creates: /tmp/swiftly
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - not _swiftly_bin.stat.exists
+    tags: [dev, swift, xtool]
+
+  # --assume-yes skips prompts; init also installs the latest toolchain and
+  # appends its env.sh source line to ~/.profile (same as the manual run).
+  - name: Run swiftly init as end-user
+    ansible.builtin.command:
+      cmd: /tmp/swiftly init --quiet-shell-followup --assume-yes
+      creates: "/home/{{ vm_enduser_name }}/.local/share/swiftly/bin/swiftly"
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    environment:
+      HOME: "/home/{{ vm_enduser_name }}"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - not _swiftly_bin.stat.exists
+    tags: [dev, swift, xtool]
+
+  # swiftly only edits ~/.profile, which non-login terminals (most GUI
+  # terminal emulators) never read, so swift would be missing from PATH there.
+  - name: Source swiftly env.sh from end-user's ~/.bashrc
+    ansible.builtin.lineinfile:
+      path: "/home/{{ vm_enduser_name }}/.bashrc"
+      regexp: 'swiftly/env\.sh'
+      line: '[ -f "$HOME/.local/share/swiftly/env.sh" ] && . "$HOME/.local/share/swiftly/env.sh"'
+      create: true
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0644"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, swift, xtool]
+
+  - name: Ensure ~/.local/bin exists for end-user
+    ansible.builtin.file:
+      path: "/home/{{ vm_enduser_name }}/.local/bin"
+      state: directory
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, swift, xtool]
+
+  - name: Install xtool AppImage for end-user
+    ansible.builtin.get_url:
+      url: "https://github.com/xtool-org/xtool/releases/latest/download/xtool-{{ ansible_architecture }}.AppImage"
+      dest: "/home/{{ vm_enduser_name }}/.local/bin/xtool"
+      owner: "{{ vm_enduser_name }}"
+      group: "{{ vm_enduser_name }}"
+      mode: "0755"
+      force: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, swift, xtool]
+
+  # The Xcode .xip needs an Apple ID browser download and cannot be fetched
+  # here; the Darwin SDK step only runs once it sits in ~/Downloads (or
+  # apple_xcode_xip is set). `xtool setup` (Apple ID login for signing) stays
+  # interactive and manual.
+  - name: Look for Xcode xip
+    ansible.builtin.find:
+      paths: "/home/{{ vm_enduser_name }}/Downloads"
+      patterns: "Xcode*.xip"
+    register: _xcode_xip
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, swift, xtool]
+
+  - name: Check whether the darwin Swift SDK is installed
+    ansible.builtin.shell:
+      executable: /bin/bash   # swiftly's env.sh is not POSIX-sh clean
+      cmd: |
+        . "$HOME/.local/share/swiftly/env.sh"
+        swift sdk list 2>/dev/null | grep -qi darwin
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    environment:
+      HOME: "/home/{{ vm_enduser_name }}"
+    register: _darwin_sdk
+    changed_when: false
+    failed_when: false
+    when: vm_enduser_name | default('') | length > 0
+    tags: [dev, swift, xtool]
+
+  - name: Install darwin Swift SDK from Xcode xip
+    ansible.builtin.shell:
+      executable: /bin/bash   # swiftly's env.sh is not POSIX-sh clean
+      cmd: |
+        . "$HOME/.local/share/swiftly/env.sh"
+        "$HOME/.local/bin/xtool" sdk install "{{ (_xcode_xip.files | sort(attribute='path') | last).path }}"
+    become: true
+    become_user: "{{ vm_enduser_name }}"
+    environment:
+      HOME: "/home/{{ vm_enduser_name }}"
+    when:
+      - vm_enduser_name | default('') | length > 0
+      - _darwin_sdk.rc != 0
+      - _xcode_xip.files | default([]) | length > 0
+    tags: [dev, swift, xtool]
 
   handlers:
   - name: Restart docker

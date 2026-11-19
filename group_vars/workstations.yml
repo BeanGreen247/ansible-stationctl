@@ -301,6 +301,29 @@ vscode_ai_extension_blocklist:
 # Dev tools (setup-dev-tools.yml) — trimmed to what's actually used day to day,
 # skips anything XFCE/desktop-specific from the reference machine's tool audit.
 # ---------------------------------------------------------------------------
+# Swift (swiftly) toolchain deps from swift.org's Debian list, plus usbmuxd
+# for xtool's USB iPhone installs. Debian 13 ships libstdc++ 14.
+swift_apt_packages:
+  - binutils
+  - git
+  - gnupg2
+  - libc6-dev
+  - libcurl4-openssl-dev
+  - libedit2
+  - libgcc-s1
+  - libpython3-dev
+  - libsqlite3-0
+  - libstdc++-14-dev
+  - libxml2-dev
+  - libncurses-dev
+  - libz3-dev
+  - pkg-config
+  - tzdata
+  - unzip
+  - zlib1g-dev
+  - usbmuxd
+  - libimobiledevice-utils
+
 dev_packages:
   - build-essential
   - python3
